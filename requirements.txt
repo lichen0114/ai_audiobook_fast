@@ -1,0 +1,7 @@
+kokoro==0.7.16
+soundfile
+numpy
+ebooklib
+beautifulsoup4
+rich
+pydub
