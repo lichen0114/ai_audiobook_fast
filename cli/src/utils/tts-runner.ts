@@ -31,6 +31,8 @@ export function runTTS(
             env: {
                 ...globalThis.process.env,
                 PYTHONUNBUFFERED: '1',
+                // Enable Apple Silicon GPU acceleration when useMPS is true
+                ...(config.useMPS ? { PYTORCH_ENABLE_MPS_FALLBACK: '1' } : {}),
             },
         });
 

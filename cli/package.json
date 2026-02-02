@@ -8,8 +8,10 @@
   },
   "scripts": {
     "dev": "tsx src/index.tsx",
+    "dev:mps": "PYTORCH_ENABLE_MPS_FALLBACK=1 tsx src/index.tsx",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "start:mps": "PYTORCH_ENABLE_MPS_FALLBACK=1 node dist/index.js"
   },
   "dependencies": {
     "chalk": "^5.3.0",

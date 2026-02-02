@@ -13,6 +13,7 @@ export interface TTSConfig {
     speed: number;
     langCode: string;
     chunkChars: number;
+    useMPS: boolean;
 }
 
 export interface FileJob {
@@ -29,6 +30,7 @@ const defaultConfig: TTSConfig = {
     speed: 1.0,
     langCode: 'a',
     chunkChars: 1200,
+    useMPS: true, // Enable Apple Silicon GPU acceleration by default
 };
 
 export function App() {

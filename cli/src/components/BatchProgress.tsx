@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, useApp, useInput } from 'ink';
 import Spinner from 'ink-spinner';
 import type { FileJob, TTSConfig } from '../App.js';
 import { runTTS } from '../utils/tts-runner.js';
@@ -73,9 +73,17 @@ function FileStatus({ file }: { file: FileJob }) {
 }
 
 export function BatchProgress({ files, setFiles, config, onComplete }: BatchProgressProps) {
+    const { exit } = useApp();
     const [currentIndex, setCurrentIndex] = useState(0);
     const [startTime] = useState(Date.now());
     const [eta, setEta] = useState<string>('Calculating...');
+
+    // Handle quit
+    useInput((input, key) => {
+        if (input === 'q' || (key.ctrl && input === 'c')) {
+            exit();
+        }
+    });
 
     const completedCount = files.filter(f => f.status === 'done').length;
     const errorCount = files.filter(f => f.status === 'error').length;

@@ -33,12 +33,13 @@ const speeds = [
     { label: '🚀 1.5x - Very Fast', value: '1.5' },
 ];
 
-type ConfigStep = 'voice' | 'speed' | 'confirm';
+type ConfigStep = 'voice' | 'speed' | 'gpu' | 'confirm';
 
 export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelProps) {
     const [step, setStep] = useState<ConfigStep>('voice');
     const [selectedVoice, setSelectedVoice] = useState(config.voice);
     const [selectedSpeed, setSelectedSpeed] = useState(config.speed);
+    const [useMPS, setUseMPS] = useState(config.useMPS);
 
     useInput((input, key) => {
         if (key.escape || (step === 'voice' && key.backspace)) {
@@ -53,6 +54,11 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
 
     const handleSpeedSelect = (item: { value: string }) => {
         setSelectedSpeed(parseFloat(item.value));
+        setStep('gpu');
+    };
+
+    const handleGPUSelect = (item: { value: string }) => {
+        setUseMPS(item.value === 'on');
         setStep('confirm');
     };
 
@@ -62,11 +68,14 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                 ...config,
                 voice: selectedVoice,
                 speed: selectedSpeed,
+                useMPS,
             });
         } else if (item.value === 'voice') {
             setStep('voice');
         } else if (item.value === 'speed') {
             setStep('speed');
+        } else if (item.value === 'gpu') {
+            setStep('gpu');
         }
     };
 
@@ -102,6 +111,9 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                     <Text>
                         ⚡ Speed: <Text color={step === 'speed' ? 'yellow' : 'green'}>{getSpeedLabel(selectedSpeed)}</Text>
                     </Text>
+                    <Text>
+                        🍎 GPU (Apple Silicon): <Text color={step === 'gpu' ? 'yellow' : useMPS ? 'green' : 'gray'}>{useMPS ? 'Enabled ⚡' : 'Disabled'}</Text>
+                    </Text>
                 </Box>
             </Box>
 
@@ -129,6 +141,24 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                 </Box>
             )}
 
+            {/* GPU Acceleration Selection */}
+            {step === 'gpu' && (
+                <Box flexDirection="column">
+                    <Text color="yellow" bold>Apple Silicon GPU Acceleration (MPS):</Text>
+                    <Text dimColor>Enable for faster processing on M1/M2/M3 Macs</Text>
+                    <Box marginTop={1}>
+                        <SelectInput
+                            items={[
+                                { label: '⚡ Enable GPU Acceleration', value: 'on' },
+                                { label: '💤 Disable (Use CPU)', value: 'off' },
+                            ]}
+                            onSelect={handleGPUSelect}
+                            initialIndex={useMPS ? 0 : 1}
+                        />
+                    </Box>
+                </Box>
+            )}
+
             {/* Confirmation */}
             {step === 'confirm' && (
                 <Box flexDirection="column">
@@ -139,6 +169,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                                 { label: '✅ Start Processing', value: 'start' },
                                 { label: '🎙️  Change Voice', value: 'voice' },
                                 { label: '⚡ Change Speed', value: 'speed' },
+                                { label: '🍎 Toggle GPU Acceleration', value: 'gpu' },
                             ]}
                             onSelect={handleConfirm}
                         />
