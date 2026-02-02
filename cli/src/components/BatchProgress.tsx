@@ -4,6 +4,7 @@ import Spinner from 'ink-spinner';
 import Gradient from 'ink-gradient';
 import type { FileJob, TTSConfig } from '../App.js';
 import { runTTS } from '../utils/tts-runner.js';
+import { GpuMonitor } from './GpuMonitor.js';
 import * as path from 'path';
 
 interface BatchProgressProps {
@@ -215,6 +216,11 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                 <Box marginTop={1}>
                     <ProgressBar progress={overallProgress} width={40} />
                 </Box>
+            </Box>
+
+            {/* GPU Monitor */}
+            <Box marginBottom={1}>
+                <GpuMonitor compact={false} showSparkline={true} />
             </Box>
 
             {/* File List */}

@@ -1,5 +1,7 @@
 # EPUB → MP3 Generator (Kokoro TTS)
 
+![Audiobook Maker](photo.png)
+
 Generate high-quality audiobook MP3s from EPUB files using the Kokoro TTS model.
 
 ## ✨ Features
@@ -9,6 +11,7 @@ Generate high-quality audiobook MP3s from EPUB files using the Kokoro TTS model.
 - 🎙️ **Multiple Voices** - Choose from various American and British voices
 - ⚡ **Speed Control** - Adjust reading speed from 0.75x to 1.5x
 - 📊 **Progress Tracking** - Real-time progress bars with ETA
+- 🖥️ **GPU Monitoring** - Real-time GPU usage display for Apple Silicon Macs
 
 ## 🚀 Quick Start
 
