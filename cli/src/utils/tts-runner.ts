@@ -52,6 +52,7 @@ export function runTTS(
         });
 
         let lastProgress = 0;
+        let lastCurrentChunk = 0;
         let lastTotal = 0;
         let stderr = '';
 
@@ -72,7 +73,7 @@ export function runTTS(
 
                         onProgress({
                             progress: lastProgress,
-                            currentChunk: 0, // Preserve previous (hacky but effective) or ignore
+                            currentChunk: lastCurrentChunk,
                             totalChunks: lastTotal,
                             workerStatus: { id, status, details }
                         });
@@ -88,6 +89,7 @@ export function runTTS(
                     const progress = Math.round((current / total) * 100);
                     // Always update on progress match
                     lastProgress = progress;
+                    lastCurrentChunk = current;
                     lastTotal = total;
                     onProgress({ progress, currentChunk: current, totalChunks: total });
                 }
@@ -105,6 +107,7 @@ export function runTTS(
                 const progress = Math.round((current / total) * 100);
                 if (progress > lastProgress || total !== lastTotal) {
                     lastProgress = progress;
+                    lastCurrentChunk = current;
                     lastTotal = total;
                     onProgress({ progress, currentChunk: current, totalChunks: total });
                 }

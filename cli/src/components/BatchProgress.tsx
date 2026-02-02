@@ -110,24 +110,31 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
     const workerStatesRef = React.useRef<Map<number, { status: string; details: string }>>(new Map());
     const filesRef = React.useRef<FileJob[]>(files);
 
+    // Dirty flags to prevent unnecessary re-renders
+    const hasWorkerUpdates = React.useRef(false);
+    const hasFileUpdates = React.useRef(false);
+
     const [eta, setEta] = useState<string>('Calculating...');
     const etaRef = React.useRef<string>('Calculating...');
 
-    // Sync refs to state periodically (10Hz) to prevent flashing
+    // Sync refs to state periodically (4Hz) to prevent flashing
     useEffect(() => {
         const interval = setInterval(() => {
             // Check if we need to update worker states
-            if (workerStatesRef.current.size > 0) {
-                // Simple equality check is hard with Maps, so we just update if there's activity
+            if (hasWorkerUpdates.current) {
                 setWorkerStates(new Map(workerStatesRef.current));
+                hasWorkerUpdates.current = false;
             }
 
             // Sync files progress
-            setFiles([...filesRef.current]);
+            if (hasFileUpdates.current) {
+                setFiles([...filesRef.current]);
+                hasFileUpdates.current = false;
+            }
 
-            // Sync ETA
+            // Sync ETA (always sync simple string, low cost)
             setEta(etaRef.current);
-        }, 100);
+        }, 250);
 
         return () => clearInterval(interval);
     }, []);
@@ -143,7 +150,7 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
 
                 // Clear worker states for new file
                 workerStatesRef.current = new Map();
-                setWorkerStates(new Map());
+                hasWorkerUpdates.current = true; // Force update
 
                 // Update status to processing
                 setFiles(prev => {
@@ -151,6 +158,7 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                         idx === i ? { ...f, status: 'processing' as const } : f
                     );
                     filesRef.current = next;
+                    hasFileUpdates.current = true;
                     return next;
                 });
 
@@ -166,6 +174,7 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                                 const next = new Map(workerStatesRef.current);
                                 next.set(id, { status, details });
                                 workerStatesRef.current = next;
+                                hasWorkerUpdates.current = true;
                             }
 
                             // Update Progress Ref (No re-render)
@@ -178,6 +187,7 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                                     totalChunks: progressInfo.totalChunks,
                                 };
                                 filesRef.current = currentFiles;
+                                hasFileUpdates.current = true;
                             }
 
                             // Update ETA Ref (No re-render)
