@@ -168,7 +168,6 @@ function FileStatus({ file, isActive }: { file: FileJob; isActive?: boolean }) {
             case 'pending':
                 return <Text color="gray" dimColor>⏳</Text>;
             case 'processing':
-            case 'processing':
                 return <Text color="cyan">►</Text>;
             case 'done':
                 return <Text color="green">✔</Text>;
@@ -329,6 +328,9 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                 workerStatesRef.current = new Map();
                 hasWorkerUpdates.current = true; // Force update
 
+                // Capture file info to avoid stale closure
+                const { inputPath, outputPath, id } = files[i];
+
                 // Update status to processing
                 setFiles(prev => {
                     const next = prev.map((f, idx) =>
@@ -341,8 +343,8 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
 
                 try {
                     await runTTS(
-                        files[i].inputPath,
-                        files[i].outputPath,
+                        inputPath,
+                        outputPath,
                         config,
                         (progressInfo: ProgressInfo) => {
                             // Update phase

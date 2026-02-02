@@ -196,7 +196,13 @@ export function runTTS(
                     lastProgress = progress;
                     lastCurrentChunk = current;
                     lastTotal = total;
-                    onProgress({ progress, currentChunk: current, totalChunks: total });
+                    onProgress({ 
+                        progress, 
+                        currentChunk: current, 
+                        totalChunks: total,
+                        phase: lastPhase,
+                        totalChars: lastTotalChars,
+                    });
                 }
             }
         });

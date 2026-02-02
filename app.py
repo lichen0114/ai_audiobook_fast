@@ -295,8 +295,9 @@ def main() -> None:
     print("Concatenating audio segments...", flush=True)
     all_arrays: List[np.ndarray] = []
     for idx in range(total_chunks):
-        if idx in results_dict:
-            all_arrays.extend(results_dict[idx])
+        if idx not in results_dict:
+            raise RuntimeError(f"Missing audio data for chunk {idx}")
+        all_arrays.extend(results_dict[idx])
 
     if all_arrays:
         combined_np = np.concatenate(all_arrays)

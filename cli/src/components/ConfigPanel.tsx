@@ -198,7 +198,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                                 { label: '4 Workers (Max for Apple Silicon)', value: '4' },
                             ]}
                             onSelect={handleWorkerSelect}
-                            initialIndex={[1, 2, 4].indexOf(selectedWorkers > 4 ? 4 : selectedWorkers || 2)}
+                            initialIndex={Math.max(0, [1, 2, 4].indexOf(selectedWorkers > 4 ? 4 : selectedWorkers || 2))}
                         />
                     </Box>
                 </Box>
