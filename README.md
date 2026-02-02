@@ -1,90 +1,204 @@
+<div align="center">
+
 # 🎧 Audiobook Maker
 
-> Transform your EPUBs into beautiful audiobooks using Kokoro TTS
+### Transform EPUBs into Beautiful Audiobooks with AI
 
-![Audiobook Maker](photo.png)
+[![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Python](https://img.shields.io/badge/Python-3.10--3.12-3776AB?logo=python&logoColor=white)](https://python.org/)
 
-Generate high-quality audiobook MP3s from EPUB files using the Kokoro TTS model.
+<img src="photo.png" alt="Audiobook Maker Preview" width="600" />
+
+*Generate studio-quality audiobooks from EPUB files using the advanced Kokoro TTS engine*
+
+[Getting Started](#-quick-start) • [Features](#-features) • [Documentation](#-usage) • [Contributing](#-contributing)
+
+</div>
+
+---
 
 ## ✨ Features
 
-- 🎨 **Beautiful Interactive CLI** - Gorgeous terminal UI with gradient colors and animations
-- 📚 **Batch Processing** - Convert multiple EPUBs at once with glob patterns
-- 🎙️ **Multiple Voices** - Choose from various American and British voices
-- ⚡ **Speed Control** - Adjust reading speed from 0.75x to 1.5x
-- 📊 **Progress Tracking** - Real-time progress bars with ETA
-- 🖥️ **GPU Monitoring** - Real-time GPU usage display for Apple Silicon Macs
+<table>
+<tr>
+<td>
+
+🎨 **Beautiful Interactive CLI**
+Gorgeous terminal UI with gradient colors, ASCII art, and smooth animations
+
+</td>
+<td>
+
+📚 **Batch Processing**
+Convert multiple EPUBs at once using glob patterns (`*.epub`)
+
+</td>
+</tr>
+<tr>
+<td>
+
+🎙️ **11+ Premium Voices**
+Choose from American & British accents, male & female voices
+
+</td>
+<td>
+
+⚡ **Speed Control**
+Adjust playback speed from 0.75x to 1.5x
+
+</td>
+</tr>
+<tr>
+<td>
+
+📊 **Real-time Progress**
+Live progress bars with accurate ETA calculations
+
+</td>
+<td>
+
+🖥️ **GPU Acceleration**
+Native Apple Silicon support for lightning-fast processing
+
+</td>
+</tr>
+</table>
+
+---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- **Node.js 18+** for the CLI
-- **Python 3.10–3.12** (Kokoro does not support 3.13+ yet)
-- **FFmpeg** for MP3 export
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| Node.js | 18+ | For the interactive CLI |
+| Python | 3.10–3.12 | Kokoro TTS doesn't support 3.13+ yet |
+| FFmpeg | Latest | Required for MP3 export |
+
+### Installation
 
 ```bash
-# Install FFmpeg (macOS)
+# 1. Clone the repository
+git clone https://github.com/lichen0114/ai_audiobook_fast.git
+cd ai_audiobook_fast
+
+# 2. Install FFmpeg (macOS)
 brew install ffmpeg
 
-# Setup Python environment
+# 3. Set up Python environment
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Install CLI dependencies
+# 4. Install CLI dependencies
 cd cli && npm install
 ```
 
-### Interactive Mode (Recommended)
+### Launch
 
 ```bash
-# From the project root directory:
+# Start the interactive CLI
 cd cli && npm run dev
 
-# Or if you're already in the cli directory:
+# For Apple Silicon GPU acceleration
+PYTORCH_ENABLE_MPS_FALLBACK=1 npm run dev
+```
+
+---
+
+## 📖 Usage
+
+### Interactive Mode *(Recommended)*
+
+Launch the beautiful terminal interface:
+
+```bash
 npm run dev
 ```
 
-This launches the beautiful interactive CLI where you can:
-1. 📂 Select EPUB files (single file, folder, or `*.epub` patterns)
-2. ⚙️ Configure voice and speed settings
-3. 🎧 Watch progress as your audiobooks are generated
+The interactive CLI guides you through:
+1. 📂 **File Selection** — Choose single files, folders, or use patterns like `*.epub`
+2. ⚙️ **Configuration** — Pick your voice, adjust speed, and set language
+3. 🎧 **Processing** — Watch real-time progress as audiobooks are generated
 
-### Command Line Usage (Original)
+### Command Line Mode
 
-For scripting or simple use cases:
+For scripting and automation:
 
 ```bash
 python app.py --input /path/to/book.epub --output /path/to/book.mp3
 ```
 
-#### Options
+<details>
+<summary><strong>📋 All Command Line Options</strong></summary>
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--input` | *required* | Path to input EPUB |
-| `--output` | *required* | Path to output MP3 |
-| `--voice` | `af_heart` | Kokoro voice (see available voices below) |
+| `--input` | *required* | Path to input EPUB file |
+| `--output` | *required* | Path to output MP3 file |
+| `--voice` | `af_heart` | Voice selection (see below) |
 | `--lang_code` | `a` | Language code |
-| `--speed` | `1.0` | Speech speed multiplier |
-| `--chunk_chars` | `1200` | Max characters per chunk |
+| `--speed` | `1.0` | Speech speed (0.75–1.5) |
+| `--chunk_chars` | `1200` | Characters per audio chunk |
 
-#### Available Voices
+</details>
 
-| Voice | Description |
-|-------|-------------|
-| `af_heart` | American Female - Warm |
-| `af_bella` | American Female - Confident |
-| `af_nicole` | American Female - Friendly |
-| `af_sarah` | American Female - Professional |
-| `af_sky` | American Female - Energetic |
-| `am_adam` | American Male - Calm |
-| `am_michael` | American Male - Authoritative |
-| `bf_emma` | British Female - Elegant |
-| `bf_isabella` | British Female - Sophisticated |
-| `bm_george` | British Male - Classic |
-| `bm_lewis` | British Male - Modern |
+---
+
+## 🎙️ Available Voices
+
+<table>
+<tr>
+<th colspan="2">🇺🇸 American English</th>
+<th colspan="2">🇬🇧 British English</th>
+</tr>
+<tr>
+<td><code>af_heart</code></td>
+<td>Female — Warm & Friendly</td>
+<td><code>bf_emma</code></td>
+<td>Female — Elegant</td>
+</tr>
+<tr>
+<td><code>af_bella</code></td>
+<td>Female — Confident</td>
+<td><code>bf_isabella</code></td>
+<td>Female — Sophisticated</td>
+</tr>
+<tr>
+<td><code>af_nicole</code></td>
+<td>Female — Friendly</td>
+<td><code>bm_george</code></td>
+<td>Male — Classic</td>
+</tr>
+<tr>
+<td><code>af_sarah</code></td>
+<td>Female — Professional</td>
+<td><code>bm_lewis</code></td>
+<td>Male — Modern</td>
+</tr>
+<tr>
+<td><code>af_sky</code></td>
+<td>Female — Energetic</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>am_adam</code></td>
+<td>Male — Calm</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>am_michael</code></td>
+<td>Male — Authoritative</td>
+<td></td>
+<td></td>
+</tr>
+</table>
+
+---
 
 ## 🖥️ CLI Preview
 
@@ -113,16 +227,37 @@ python app.py --input /path/to/book.epub --output /path/to/book.mp3
 ⏱️  ETA: 2 min
 ```
 
-## 🔧 Apple Silicon GPU Acceleration
+---
 
-For faster processing on Apple Silicon Macs:
+## 📝 Technical Notes
 
-```bash
-PYTORCH_ENABLE_MPS_FALLBACK=1 npm run dev
-```
+- **Audio Export** — Uses FFmpeg via `pydub` for high-quality MP3 encoding
+- **ETA Calculation** — Based on rolling average, stabilizes after first few chunks
+- **Output Naming** — Files are saved with the same name as input (`.epub` → `.mp3`)
+- **GPU Support** — Apple Silicon Macs can use MPS acceleration for 2-3x faster processing
 
-## 📝 Notes
+---
 
-- MP3 export uses FFmpeg via `pydub`
-- ETA is based on average processing speed and stabilizes after the first few chunks
-- Output files are saved with the same name as input (`.epub` → `.mp3`)
+## 🤝 Contributing
+
+Contributions are welcome! Feel free to:
+
+- 🐛 Report bugs
+- 💡 Suggest new features
+- 🔧 Submit pull requests
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).
+
+---
+
+<div align="center">
+
+**Made with ❤️ by [Li-Chen Wang](https://github.com/lichen0114)**
+
+*Powered by [Kokoro TTS](https://github.com/hexgrad/kokoro)*
+
+</div>
