@@ -41,7 +41,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
     const [step, setStep] = useState<ConfigStep>('voice');
     const [selectedVoice, setSelectedVoice] = useState(config.voice);
     const [selectedSpeed, setSelectedSpeed] = useState(config.speed);
-    const [selectedWorkers, setSelectedWorkers] = useState(config.workers || 4);
+    const [selectedWorkers, setSelectedWorkers] = useState(config.workers || 2);
     const [useMPS, setUseMPS] = useState(config.useMPS);
     const [outputDir, setOutputDir] = useState<string | null>(config.outputDir);
     const [customPath, setCustomPath] = useState('');
@@ -189,17 +189,16 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
             {step === 'workers' && (
                 <Box flexDirection="column">
                     <Text color="yellow" bold>Select number of parallel workers:</Text>
-                    <Text dimColor>More workers = faster processing but higher CPU usage</Text>
+                    <Text dimColor>On Apple Silicon, 1-2 workers is optimal (GPU serializes operations)</Text>
                     <Box marginTop={1}>
                         <SelectInput
                             items={[
-                                { label: '1 Worker (Low CPU)', value: '1' },
+                                { label: '1 Worker (Recommended for MPS)', value: '1' },
                                 { label: '2 Workers (Balanced)', value: '2' },
-                                { label: '4 Workers (Recommended)', value: '4' },
-                                { label: '8 Workers (Max Speed)', value: '8' },
+                                { label: '4 Workers (Max for Apple Silicon)', value: '4' },
                             ]}
                             onSelect={handleWorkerSelect}
-                            initialIndex={[1, 2, 4, 8].indexOf(selectedWorkers || 4)}
+                            initialIndex={[1, 2, 4].indexOf(selectedWorkers > 4 ? 4 : selectedWorkers || 2)}
                         />
                     </Box>
                 </Box>

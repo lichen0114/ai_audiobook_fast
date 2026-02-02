@@ -47,7 +47,14 @@ export function runTTS(
                 ...globalThis.process.env,
                 PYTHONUNBUFFERED: '1',
                 // Enable Apple Silicon GPU acceleration when useMPS is true
-                ...(config.useMPS ? { PYTORCH_ENABLE_MPS_FALLBACK: '1' } : {}),
+                ...(config.useMPS ? {
+                    PYTORCH_ENABLE_MPS_FALLBACK: '1',
+                    // MPS memory optimization - aggressive cleanup for 8GB Macs
+                    PYTORCH_MPS_HIGH_WATERMARK_RATIO: '0.0',
+                    // Limit thread parallelism to reduce GIL contention
+                    OMP_NUM_THREADS: '4',
+                    OPENBLAS_NUM_THREADS: '2',
+                } : {}),
             },
         });
 
@@ -55,6 +62,7 @@ export function runTTS(
         let lastCurrentChunk = 0;
         let lastTotal = 0;
         let stderr = '';
+        const MAX_STDERR = 10000;
 
         process.stdout.on('data', (data: Buffer) => {
             const output = data.toString();
@@ -98,6 +106,10 @@ export function runTTS(
 
         process.stderr.on('data', (data: Buffer) => {
             stderr += data.toString();
+            // Bound stderr buffer to prevent memory leak on long runs
+            if (stderr.length > MAX_STDERR) {
+                stderr = stderr.slice(-MAX_STDERR);
+            }
 
             // Also check stderr for progress (rich sometimes writes there)
             const chunkMatch = stderr.match(/(\d+)\/(\d+)\s*chunks/);

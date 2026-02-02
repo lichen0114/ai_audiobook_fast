@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tree:*)",
+      "Bash(source:*)",
+      "Bash(python -c:*)",
+      "Bash(npm run build:*)",
+      "Bash(python3 -m py_compile:*)"
+    ]
+  }
+}

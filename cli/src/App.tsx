@@ -41,7 +41,7 @@ const defaultConfig: TTSConfig = {
     chunkChars: 1200,
     useMPS: true, // Enable Apple Silicon GPU acceleration by default
     outputDir: null,
-    workers: 4, // Use 4 parallel workers by default for faster processing
+    workers: 2, // Use 2 parallel workers by default (optimal for Apple Silicon MPS)
 };
 
 function formatBytes(bytes: number): string {

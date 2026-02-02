@@ -4,7 +4,6 @@ import re
 import sys
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from queue import Queue
 from typing import Iterable, List, Tuple, Optional
@@ -81,21 +80,35 @@ def split_text_to_chunks(chapters: List[Tuple[str, str]], chunk_chars: int) -> L
     return chunks
 
 
-def audio_to_segment(audio: np.ndarray, rate: int = SAMPLE_RATE) -> AudioSegment:
-    if not isinstance(audio, np.ndarray):
-        try:
-            import torch
-        except ImportError:
-            torch = None
+try:
+    import torch
+except ImportError:
+    torch = None
 
-        if torch is not None and isinstance(audio, torch.Tensor):
-            audio = audio.detach().cpu().numpy()
-        else:
-            audio = np.asarray(audio)
+
+def audio_to_int16(audio) -> np.ndarray:
+    """Convert audio tensor/array to int16 numpy array.
+
+    Optimized to avoid unnecessary GPU→CPU transfers when tensor is already on CPU.
+    """
+    if torch is not None and isinstance(audio, torch.Tensor):
+        # Only move to CPU if on MPS/CUDA
+        if audio.device.type != 'cpu':
+            audio = audio.detach().cpu()
+        audio = audio.numpy()
+    elif not isinstance(audio, np.ndarray):
+        audio = np.asarray(audio)
 
     if audio.dtype != np.int16:
         audio = np.clip(audio, -1.0, 1.0)
         audio = (audio * 32767.0).astype(np.int16)
+    return audio
+
+
+def audio_to_segment(audio: np.ndarray, rate: int = SAMPLE_RATE) -> AudioSegment:
+    """Convert numpy int16 array to AudioSegment."""
+    if audio.dtype != np.int16:
+        audio = audio_to_int16(audio)
     return AudioSegment(
         audio.tobytes(),
         frame_rate=rate,
@@ -155,7 +168,6 @@ def main() -> None:
         )
 
     args = parse_args()
-    num_workers = max(1, args.workers)
 
     if not os.path.exists(args.input):
         raise FileNotFoundError(f"Input EPUB not found: {args.input}")
@@ -169,20 +181,14 @@ def main() -> None:
     pipeline = KPipeline(lang_code=args.lang_code)
     total_chunks = len(chunks)
 
-    # Queue for text chunks to be processed
-    # Each item is (chunk_index, text_chunk)
-    chunk_queue: Queue = Queue()
-    for idx, chunk in enumerate(chunks):
-        chunk_queue.put((idx, chunk))
-    
-    # Store results by index to ensure correct order
+    # Store results as int16 numpy arrays (not AudioSegments) for O(n) concatenation
+    # Dict[chunk_idx, List[np.ndarray]]
     results_dict: dict = {}
     results_lock = threading.Lock()
-    
-    completed_count = [0]
-    lock = threading.Lock()
-    print_lock = threading.Lock()
-    errors: List[Exception] = []
+
+    # Queue for background CPU encoding: (chunk_idx, audio_tensor)
+    encoding_queue: Queue = Queue()
+    encoding_error: List[Optional[Exception]] = [None]
 
     progress = None
     task_id = None
@@ -199,113 +205,87 @@ def main() -> None:
 
     times: List[float] = []
 
-    def worker(worker_id: int):
-        """Combined Worker: Handles both GPU Inference and CPU Encoding"""
-        while True:
-            try:
-                # Non-blocking get or check empty
-                if chunk_queue.empty():
+    def encoding_worker():
+        """Background thread: CPU-bound int16 conversion."""
+        try:
+            while True:
+                item = encoding_queue.get()
+                if item is None:  # Sentinel to stop
                     break
-                
-                try:
-                    item = chunk_queue.get_nowait()
-                except:
-                    break
-
-                idx, chunk = item
-                
-                # Status: Inference
-                with print_lock:
-                    print(f"WORKER:{worker_id}:INFER:Chunk {idx+1}/{total_chunks}", flush=True)
-
-                # 1. Inference (GPU-bound)
-                # KPipeline is generally thread-safe for inference if just calling __call__
-                # If race conditions occur, we might need a lock around pipeline(), but let's try parallel first for MPS
-                start = time.perf_counter()
-                
-                chunk_audios = []
-                # Use a specific list to collect all generator outputs
-                for audio in generate_audio_segments(
-                    pipeline=pipeline,
-                    text=chunk.text,
-                    voice=args.voice,
-                    speed=args.speed,
-                    split_pattern=args.split_pattern,
-                ):
-                    chunk_audios.append(audio)
-                
-                # Status: Encoding
-                with print_lock:
-                    print(f"WORKER:{worker_id}:ENCODE:Chunk {idx+1}", flush=True)
-
-                # 2. Encoding (CPU-bound)
-                segments = []
-                for audio in chunk_audios:
-                    segment = audio_to_segment(audio, rate=SAMPLE_RATE)
-                    segments.append(segment)
-                
-                elapsed = time.perf_counter() - start
-                
-                # Store results
+                idx, audio = item
+                int16_audio = audio_to_int16(audio)
                 with results_lock:
-                    results_dict[idx] = segments
-                
-                with lock:
-                    times.append(elapsed)
-                    completed_count[0] += 1
-                    if progress and task_id is not None:
-                        progress.update(task_id, advance=1)
-                    # Explicit progress output for CLI parsing
-                    with print_lock:
-                        print(f"PROGRESS:{completed_count[0]}/{total_chunks} chunks", flush=True)
+                    if idx not in results_dict:
+                        results_dict[idx] = []
+                    results_dict[idx].append(int16_audio)
+        except Exception as e:
+            encoding_error[0] = e
 
-                # Status: Idle
-                with print_lock:
-                    print(f"WORKER:{worker_id}:IDLE:", flush=True)
+    # Start background encoding thread
+    encoder_thread = threading.Thread(target=encoding_worker, daemon=True)
+    encoder_thread.start()
 
-            except Exception as e:
-                with lock:
-                    errors.append(e)
-                # Don't break immediately, maybe just log? 
-                # Ideally we stop, but let's try to finish other chunks if possible 
-                # or just set a flag to stop all workers.
-                break
+    print(f"Processing {total_chunks} chunks (sequential GPU + background encoding)", flush=True)
 
-    print(f"Using {num_workers} parallel workers for Inference + Encoding", flush=True)
+    def run_inference():
+        """Main thread: sequential GPU inference."""
+        for idx, chunk in enumerate(chunks):
+            start = time.perf_counter()
+
+            # Status: Inference
+            print(f"WORKER:0:INFER:Chunk {idx+1}/{total_chunks}", flush=True)
+
+            # GPU inference - sequential for MPS (no benefit from threading)
+            for audio in generate_audio_segments(
+                pipeline=pipeline,
+                text=chunk.text,
+                voice=args.voice,
+                speed=args.speed,
+                split_pattern=args.split_pattern,
+            ):
+                # Queue audio for background CPU encoding
+                encoding_queue.put((idx, audio))
+
+            elapsed = time.perf_counter() - start
+            times.append(elapsed)
+
+            # Update progress
+            if progress and task_id is not None:
+                progress.update(task_id, advance=1)
+            print(f"PROGRESS:{idx+1}/{total_chunks} chunks", flush=True)
+
+        # Signal encoding thread to finish
+        encoding_queue.put(None)
 
     if progress:
         with progress:
-            threads = []
-            for i in range(num_workers):
-                t = threading.Thread(target=worker, args=(i,), daemon=True)
-                t.start()
-                threads.append(t)
-
-            for t in threads:
-                t.join()
+            run_inference()
     else:
-        # Simple execution without rich progress
-        threads = []
-        for i in range(num_workers):
-            t = threading.Thread(target=worker, args=(i,), daemon=True)
-            t.start()
-            threads.append(t)
+        run_inference()
 
-        for t in threads:
-            t.join()
+    # Wait for encoding to complete
+    encoder_thread.join()
 
-    if errors:
-        raise errors[0]
+    if encoding_error[0]:
+        raise encoding_error[0]
 
-
-
-    # Concatenate all segments in correct order
+    # O(n) concatenation: collect all int16 arrays, concatenate once
     print("Concatenating audio segments...", flush=True)
-    combined = AudioSegment.empty()
+    all_arrays: List[np.ndarray] = []
     for idx in range(total_chunks):
         if idx in results_dict:
-            for segment in results_dict[idx]:
-                combined += segment
+            all_arrays.extend(results_dict[idx])
+
+    if all_arrays:
+        combined_np = np.concatenate(all_arrays)
+        combined = AudioSegment(
+            combined_np.tobytes(),
+            frame_rate=SAMPLE_RATE,
+            sample_width=2,
+            channels=1,
+        )
+    else:
+        combined = AudioSegment.empty()
 
     output_dir = os.path.dirname(os.path.abspath(args.output))
     if output_dir and not os.path.exists(output_dir):
@@ -314,14 +294,11 @@ def main() -> None:
     combined.export(args.output, format="mp3", bitrate="192k")
 
     avg_time = sum(times) / max(len(times), 1)
-    total_est = avg_time * total_chunks
 
     print("\nDone.")
     print(f"Output: {args.output}")
     print(f"Chunks: {total_chunks}")
-    print(f"Workers: {num_workers}")
     print(f"Average chunk time: {avg_time:.2f}s")
-    print(f"Estimated total time: {total_est:.2f}s")
 
 
 if __name__ == "__main__":
