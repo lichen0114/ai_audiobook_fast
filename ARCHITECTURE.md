@@ -30,12 +30,12 @@ The interaction between the CLI and the Python backend is process-based. The CLI
 
 ```mermaid
 graph TD
-    User([User]) -->|Run Command| CLI[CLI App (Node.js)]
-    CLI -->|Spawns Process| Python[Python Backend (app.py)]
+    User([User]) -->|Run Command| CLI["CLI App (Node.js)"]
+    CLI -->|Spawns Process| Python["Python Backend (app.py)"]
     
     subgraph Frontend [Frontend Layer]
         CLI
-        UI[Terminal UI (Ink)]
+        UI["Terminal UI (Ink)"]
         Runner[TTS Runner]
         CLI --> UI
         CLI --> Runner
