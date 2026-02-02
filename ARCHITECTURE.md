@@ -57,6 +57,51 @@ graph TD
     Runner -->|Update State| UI
 ```
 
+## Parallel Processing Strategy
+
+To maximize performance, especially on machines with capable GPUs (like Apple Silicon), the system employs a parallel processing pipeline.
+
+### Producer-Consumer Pattern
+- **Producer**: The main thread reads the EPUB, cleans the text, and splits it into optimal chunks (default ~1200 chars). These chunks are pushed into a thread-safe `queue.Queue`.
+- **Consumers**: Multiple worker threads (default: 2) pull chunks from the queue and process them independently.
+
+### Worker Lifecycle
+Each worker performs two distinct stages for every chunk:
+1.  **Inference (GPU-bound)**: The worker uses the `kokoro` pipeline to generate raw audio data. On Apple Silicon, this leverages MPS (Metal Performance Shaders) for acceleration.
+2.  **Encoding (CPU-bound)**: The raw audio is converted to an `AudioSegment` (16-bit PCM, 24kHz) using `pydub`/`numpy`.
+
+### Synchronization
+- **Results Storage**: Completed audio segments are stored in a dictionary keyed by chunk index (`results_dict`). A `threading.Lock` facilitates safe concurrent writes.
+- **Ordered Assembly**: After all chunks are processed, the main thread reassembles the audio segments in the correct order (0 to N) to ensure the audiobook flows correctly.
+- **Console Output**: A dedicated `print_lock` ensures that status updates from multiple threads (e.g., `WORKER:0:INFER...`) do not interleave and corrupt the output parsing by the CLI.
+
+```mermaid
+sequenceDiagram
+    participant Main as Main Thread
+    participant Queue
+    participant W1 as Worker 1
+    participant W2 as Worker 2
+    participant Results as Results Dict
+
+    Main->>Queue: Put Chunk 1
+    Main->>Queue: Put Chunk 2
+    
+    par Worker Processing
+        W1->>Queue: Get Chunk 1
+        W2->>Queue: Get Chunk 2
+        W1->>W1: Inference (GPU)
+        W2->>W2: Inference (GPU)
+        W1->>W1: Encoding (CPU)
+        W2->>W2: Encoding (CPU)
+        W1->>Results: Store Segment 1
+        W2->>Results: Store Segment 2
+    end
+    
+    Main->>Results: Retrieve All Segments
+    Main->>Main: Assemble Audiobook
+```
+
+
 ## Data Flow
 
 The data flow pipeline transforms an EPUB file into a single MP3 audio file.
