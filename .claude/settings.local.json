@@ -6,7 +6,9 @@
       "Bash(python -c:*)",
       "Bash(npm run build:*)",
       "Bash(python3 -m py_compile:*)",
-      "Bash(python -m py_compile:*)"
+      "Bash(python -m py_compile:*)",
+      "Bash(python3:*)",
+      "Bash(ls:*)"
     ]
   }
 }

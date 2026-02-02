@@ -51,9 +51,11 @@ Uses sequential GPU inference + background encoding (optimized for Apple Silicon
 2. Main thread runs Kokoro inference sequentially (GPU), queues audio for encoding
 3. Background thread converts audio tensors to int16 numpy arrays
 4. Results stored as numpy arrays, concatenated with `np.concatenate()` (O(n) vs O(n²))
-5. Final AudioSegment exported to MP3
+5. Raw PCM piped directly to ffmpeg for MP3 export (bypasses WAV 4GB limit)
 
 **Why not multi-threaded GPU?** MPS serializes GPU operations, so multiple workers queue up waiting. Testing showed 0.88x slower with threading.
+
+**Why direct ffmpeg instead of pydub?** pydub's `export()` creates an intermediate WAV file, which has a 4GB limit (~24.9 hours at 24kHz 16-bit mono). Long audiobooks exceed this. The `export_pcm_to_mp3()` function pipes raw PCM via stdin to ffmpeg, avoiding this limitation.
 
 Key Python args: `--input`, `--output`, `--voice`, `--speed`, `--chunk_chars`
 
@@ -78,7 +80,7 @@ When MPS is enabled, `tts-runner.ts` sets:
 
 ## Key Dependencies
 
-- **Python**: kokoro (TTS), ebooklib (EPUB), pydub (audio), torch, numpy
+- **Python**: kokoro (TTS), ebooklib (EPUB), torch, numpy
 - **Node.js**: react, ink (terminal UI), commander (CLI args), glob (file patterns)
 - **System**: FFmpeg (required for MP3 export), Python 3.10-3.12 (Kokoro requirement)
 

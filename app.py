@@ -1,6 +1,8 @@
 import argparse
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import threading
@@ -115,6 +117,47 @@ def audio_to_segment(audio: np.ndarray, rate: int = SAMPLE_RATE) -> AudioSegment
         sample_width=2,
         channels=1,
     )
+
+
+def export_pcm_to_mp3(
+    pcm_data: np.ndarray,
+    output_path: str,
+    sample_rate: int = SAMPLE_RATE,
+    bitrate: str = "192k",
+) -> None:
+    """Export raw PCM int16 data directly to MP3 via ffmpeg.
+
+    Bypasses pydub's WAV intermediate file, avoiding the 4GB limit.
+    """
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path is None:
+        raise FileNotFoundError(
+            "ffmpeg not found. Install with: brew install ffmpeg"
+        )
+
+    if pcm_data.size == 0:
+        # Create minimal silent MP3
+        cmd = [ffmpeg_path, "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+               "-t", "0.1", "-b:a", bitrate, "-y", output_path]
+        subprocess.run(cmd, check=True, capture_output=True)
+        return
+
+    if pcm_data.dtype != np.int16:
+        pcm_data = pcm_data.astype(np.int16)
+
+    cmd = [
+        ffmpeg_path,
+        "-f", "s16le",           # signed 16-bit little-endian
+        "-ar", str(sample_rate),
+        "-ac", "1",              # mono
+        "-i", "pipe:0",          # stdin
+        "-b:a", bitrate,
+        "-y", output_path,
+    ]
+
+    proc = subprocess.run(cmd, input=pcm_data.tobytes(), capture_output=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {proc.stderr.decode()}")
 
 
 def generate_audio_segments(
@@ -300,14 +343,8 @@ def main() -> None:
 
     if all_arrays:
         combined_np = np.concatenate(all_arrays)
-        combined = AudioSegment(
-            combined_np.tobytes(),
-            frame_rate=SAMPLE_RATE,
-            sample_width=2,
-            channels=1,
-        )
     else:
-        combined = AudioSegment.empty()
+        combined_np = np.array([], dtype=np.int16)
 
     output_dir = os.path.dirname(os.path.abspath(args.output))
     if output_dir and not os.path.exists(output_dir):
@@ -315,7 +352,7 @@ def main() -> None:
 
     # Phase: Exporting
     print("PHASE:EXPORTING", flush=True)
-    combined.export(args.output, format="mp3", bitrate="192k")
+    export_pcm_to_mp3(combined_np, args.output, sample_rate=SAMPLE_RATE, bitrate="192k")
 
     avg_time = sum(times) / max(len(times), 1)
 
