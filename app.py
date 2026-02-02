@@ -3,8 +3,11 @@ import os
 import re
 import sys
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Iterable, List, Tuple
+from queue import Queue
+from typing import Iterable, List, Tuple, Optional
 
 import numpy as np
 from bs4 import BeautifulSoup
@@ -131,6 +134,17 @@ def parse_args() -> argparse.Namespace:
         default=r"\n+",
         help="Regex used by Kokoro for internal splitting",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=2,
+        help="Number of parallel workers for audio encoding (default: 2)",
+    )
+    parser.add_argument(
+        "--no_rich",
+        action="store_true",
+        help="Disable rich progress bar (for CLI integration)",
+    )
     return parser.parse_args()
 
 
@@ -141,6 +155,7 @@ def main() -> None:
         )
 
     args = parse_args()
+    num_workers = max(1, args.workers)
 
     if not os.path.exists(args.input):
         raise FileNotFoundError(f"Input EPUB not found: {args.input}")
@@ -152,41 +167,145 @@ def main() -> None:
         raise ValueError("No text chunks produced from EPUB.")
 
     pipeline = KPipeline(lang_code=args.lang_code)
-
-    combined = AudioSegment.empty()
-
-    progress = Progress(
-        TextColumn("[bold]Generating[/bold]"),
-        BarColumn(),
-        TextColumn("{task.completed}/{task.total} chunks"),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
-    )
-
     total_chunks = len(chunks)
-    task_id = progress.add_task("tts", total=total_chunks)
+
+    # Queue for text chunks to be processed
+    # Each item is (chunk_index, text_chunk)
+    chunk_queue: Queue = Queue()
+    for idx, chunk in enumerate(chunks):
+        chunk_queue.put((idx, chunk))
+    
+    # Store results by index to ensure correct order
+    results_dict: dict = {}
+    results_lock = threading.Lock()
+    
+    completed_count = [0]
+    lock = threading.Lock()
+    print_lock = threading.Lock()
+    errors: List[Exception] = []
+
+    progress = None
+    task_id = None
+
+    if not args.no_rich:
+        progress = Progress(
+            TextColumn("[bold]Generating[/bold]"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total} chunks"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        )
+        task_id = progress.add_task("tts", total=total_chunks)
 
     times: List[float] = []
 
-    with progress:
-        for chunk in chunks:
-            start = time.perf_counter()
+    def worker(worker_id: int):
+        """Combined Worker: Handles both GPU Inference and CPU Encoding"""
+        while True:
+            try:
+                # Non-blocking get or check empty
+                if chunk_queue.empty():
+                    break
+                
+                try:
+                    item = chunk_queue.get_nowait()
+                except:
+                    break
 
-            for audio in generate_audio_segments(
-                pipeline=pipeline,
-                text=chunk.text,
-                voice=args.voice,
-                speed=args.speed,
-                split_pattern=args.split_pattern,
-            ):
-                combined += audio_to_segment(audio, rate=SAMPLE_RATE)
+                idx, chunk = item
+                
+                # Status: Inference
+                with print_lock:
+                    print(f"WORKER:{worker_id}:INFER:Chunk {idx+1}/{total_chunks}", flush=True)
 
-            elapsed = time.perf_counter() - start
-            times.append(elapsed)
+                # 1. Inference (GPU-bound)
+                # KPipeline is generally thread-safe for inference if just calling __call__
+                # If race conditions occur, we might need a lock around pipeline(), but let's try parallel first for MPS
+                start = time.perf_counter()
+                
+                chunk_audios = []
+                # Use a specific list to collect all generator outputs
+                for audio in generate_audio_segments(
+                    pipeline=pipeline,
+                    text=chunk.text,
+                    voice=args.voice,
+                    speed=args.speed,
+                    split_pattern=args.split_pattern,
+                ):
+                    chunk_audios.append(audio)
+                
+                # Status: Encoding
+                with print_lock:
+                    print(f"WORKER:{worker_id}:ENCODE:Chunk {idx+1}", flush=True)
 
-            progress.update(task_id, advance=1)
-            # Explicit progress output for CLI parsing
-            print(f"PROGRESS:{len(times)}/{total_chunks} chunks", flush=True)
+                # 2. Encoding (CPU-bound)
+                segments = []
+                for audio in chunk_audios:
+                    segment = audio_to_segment(audio, rate=SAMPLE_RATE)
+                    segments.append(segment)
+                
+                elapsed = time.perf_counter() - start
+                
+                # Store results
+                with results_lock:
+                    results_dict[idx] = segments
+                
+                with lock:
+                    times.append(elapsed)
+                    completed_count[0] += 1
+                    if progress and task_id is not None:
+                        progress.update(task_id, advance=1)
+                    # Explicit progress output for CLI parsing
+                    with print_lock:
+                        print(f"PROGRESS:{completed_count[0]}/{total_chunks} chunks", flush=True)
+
+                # Status: Idle
+                with print_lock:
+                    print(f"WORKER:{worker_id}:IDLE:", flush=True)
+
+            except Exception as e:
+                with lock:
+                    errors.append(e)
+                # Don't break immediately, maybe just log? 
+                # Ideally we stop, but let's try to finish other chunks if possible 
+                # or just set a flag to stop all workers.
+                break
+
+    print(f"Using {num_workers} parallel workers for Inference + Encoding", flush=True)
+
+    if progress:
+        with progress:
+            threads = []
+            for i in range(num_workers):
+                t = threading.Thread(target=worker, args=(i,), daemon=True)
+                t.start()
+                threads.append(t)
+
+            for t in threads:
+                t.join()
+    else:
+        # Simple execution without rich progress
+        threads = []
+        for i in range(num_workers):
+            t = threading.Thread(target=worker, args=(i,), daemon=True)
+            t.start()
+            threads.append(t)
+
+        for t in threads:
+            t.join()
+
+    if errors:
+        raise errors[0]
+
+
+
+    # Concatenate all segments in correct order
+    print("Concatenating audio segments...", flush=True)
+    combined = AudioSegment.empty()
+    for idx in range(total_chunks):
+        if idx in results_dict:
+            for segment in results_dict[idx]:
+                combined += segment
 
     output_dir = os.path.dirname(os.path.abspath(args.output))
     if output_dir and not os.path.exists(output_dir):
@@ -200,9 +319,11 @@ def main() -> None:
     print("\nDone.")
     print(f"Output: {args.output}")
     print(f"Chunks: {total_chunks}")
+    print(f"Workers: {num_workers}")
     print(f"Average chunk time: {avg_time:.2f}s")
     print(f"Estimated total time: {total_est:.2f}s")
 
 
 if __name__ == "__main__":
     main()
+

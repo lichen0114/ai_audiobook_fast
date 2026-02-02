@@ -18,6 +18,7 @@ export interface TTSConfig {
     chunkChars: number;
     useMPS: boolean;
     outputDir: string | null; // null means same directory as input
+    workers: number; // Number of parallel workers for audio encoding
 }
 
 export interface FileJob {
@@ -40,6 +41,7 @@ const defaultConfig: TTSConfig = {
     chunkChars: 1200,
     useMPS: true, // Enable Apple Silicon GPU acceleration by default
     outputDir: null,
+    workers: 4, // Use 4 parallel workers by default for faster processing
 };
 
 function formatBytes(bytes: number): string {

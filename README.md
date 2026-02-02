@@ -63,6 +63,20 @@ Native Apple Silicon support for lightning-fast processing
 
 </td>
 </tr>
+<tr>
+<td>
+
+🚀 **Parallel Processing**
+Multi-worker pipeline maximizes GPU/CPU utilization for 2-3x faster conversion
+
+</td>
+<td>
+
+🔧 **Highly Configurable**
+Tune chunk size, worker count, and more for optimal performance
+
+</td>
+</tr>
 </table>
 
 ---
@@ -120,7 +134,7 @@ npm run dev
 
 The interactive CLI guides you through:
 1. 📂 **File Selection** — Choose single files, folders, or use patterns like `*.epub`
-2. ⚙️ **Configuration** — Pick your voice, adjust speed, and set language
+2. ⚙️ **Configuration** — Pick your voice, adjust speed, set worker count, and language
 3. 🎧 **Processing** — Watch real-time progress as audiobooks are generated
 
 ### Command Line Mode
@@ -142,6 +156,7 @@ python app.py --input /path/to/book.epub --output /path/to/book.mp3
 | `--lang_code` | `a` | Language code |
 | `--speed` | `1.0` | Speech speed (0.75–1.5) |
 | `--chunk_chars` | `1200` | Characters per audio chunk |
+| `--workers` | `2` | Parallel workers for audio encoding (increase for faster processing) |
 
 </details>
 
@@ -218,6 +233,7 @@ python app.py --input /path/to/book.epub --output /path/to/book.mp3
 ⚙️  Settings
 ├── Voice: 💜 af_heart (American Female - Warm)
 ├── Speed: ▶️  1.0x - Normal
+├── Workers: 🔨 4 (Recommended)
 └── Language: English
 
 📊 Processing
@@ -231,10 +247,21 @@ python app.py --input /path/to/book.epub --output /path/to/book.mp3
 
 ## 📝 Technical Notes
 
+- **Parallel Processing** — Uses async producer-consumer pipeline with multiple worker threads
 - **Audio Export** — Uses FFmpeg via `pydub` for high-quality MP3 encoding
 - **ETA Calculation** — Based on rolling average, stabilizes after first few chunks
 - **Output Naming** — Files are saved with the same name as input (`.epub` → `.mp3`)
 - **GPU Support** — Apple Silicon Macs can use MPS acceleration for 2-3x faster processing
+
+### Performance Tips
+
+```bash
+# For maximum speed on Apple Silicon:
+PYTORCH_ENABLE_MPS_FALLBACK=1 python app.py --input book.epub --output book.mp3 --workers 4
+```
+
+- Increase `--workers` (4-8) for faster audio encoding
+- Increase `--chunk_chars` (2000-3000) for fewer chunks to process
 
 ---
 

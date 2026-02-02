@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
-import Spinner from 'ink-spinner';
 import Gradient from 'ink-gradient';
 import type { FileJob, TTSConfig } from '../App.js';
 import { runTTS, type ProgressInfo } from '../utils/tts-runner.js';
@@ -41,7 +40,8 @@ function FileStatus({ file, isActive }: { file: FileJob; isActive?: boolean }) {
             case 'pending':
                 return <Text color="gray" dimColor>⏳</Text>;
             case 'processing':
-                return <Text color="cyan"><Spinner type="dots12" /></Text>;
+            case 'processing':
+                return <Text color="cyan">►</Text>;
             case 'done':
                 return <Text color="green">✔</Text>;
             case 'error':
@@ -91,7 +91,7 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
     const { exit } = useApp();
     const [currentIndex, setCurrentIndex] = useState(0);
     const [startTime] = useState(Date.now());
-    const [eta, setEta] = useState<string>('Calculating...');
+
 
     // Handle quit
     useInput((input, key) => {
@@ -104,15 +104,55 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
     const errorCount = files.filter(f => f.status === 'error').length;
     const overallProgress = Math.round(((completedCount + errorCount) / files.length) * 100);
 
+    const [workerStates, setWorkerStates] = useState<Map<number, { status: string; details: string }>>(new Map());
+
+    // Refs for throttling updates
+    const workerStatesRef = React.useRef<Map<number, { status: string; details: string }>>(new Map());
+    const filesRef = React.useRef<FileJob[]>(files);
+
+    const [eta, setEta] = useState<string>('Calculating...');
+    const etaRef = React.useRef<string>('Calculating...');
+
+    // Sync refs to state periodically (10Hz) to prevent flashing
+    useEffect(() => {
+        const interval = setInterval(() => {
+            // Check if we need to update worker states
+            if (workerStatesRef.current.size > 0) {
+                // Simple equality check is hard with Maps, so we just update if there's activity
+                setWorkerStates(new Map(workerStatesRef.current));
+            }
+
+            // Sync files progress
+            setFiles([...filesRef.current]);
+
+            // Sync ETA
+            setEta(etaRef.current);
+        }, 100);
+
+        return () => clearInterval(interval);
+    }, []);
+
+    useEffect(() => {
+        filesRef.current = files;
+    }, [files]);
+
     useEffect(() => {
         const processFiles = async () => {
             for (let i = 0; i < files.length; i++) {
                 setCurrentIndex(i);
 
+                // Clear worker states for new file
+                workerStatesRef.current = new Map();
+                setWorkerStates(new Map());
+
                 // Update status to processing
-                setFiles(prev => prev.map((f, idx) =>
-                    idx === i ? { ...f, status: 'processing' as const } : f
-                ));
+                setFiles(prev => {
+                    const next = prev.map((f, idx) =>
+                        idx === i ? { ...f, status: 'processing' as const } : f
+                    );
+                    filesRef.current = next;
+                    return next;
+                });
 
                 try {
                     await runTTS(
@@ -120,16 +160,27 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                         files[i].outputPath,
                         config,
                         (progressInfo: ProgressInfo) => {
-                            setFiles(prev => prev.map((f, idx) =>
-                                idx === i ? {
-                                    ...f,
+                            // Update Worker Status Ref (No re-render)
+                            if (progressInfo.workerStatus) {
+                                const { id, status, details } = progressInfo.workerStatus;
+                                const next = new Map(workerStatesRef.current);
+                                next.set(id, { status, details });
+                                workerStatesRef.current = next;
+                            }
+
+                            // Update Progress Ref (No re-render)
+                            if (progressInfo.totalChunks > 0) {
+                                const currentFiles = [...filesRef.current];
+                                currentFiles[i] = {
+                                    ...currentFiles[i],
                                     progress: progressInfo.progress,
                                     currentChunk: progressInfo.currentChunk,
                                     totalChunks: progressInfo.totalChunks,
-                                } : f
-                            ));
+                                };
+                                filesRef.current = currentFiles;
+                            }
 
-                            // Update ETA based on chunks
+                            // Update ETA Ref (No re-render)
                             const elapsed = Date.now() - startTime;
                             if (progressInfo.totalChunks > 0 && progressInfo.currentChunk > 0) {
                                 const avgTimePerChunk = elapsed / progressInfo.currentChunk;
@@ -137,27 +188,35 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                                 const remainingTime = avgTimePerChunk * remainingChunks;
 
                                 if (remainingTime > 60000) {
-                                    setEta(`${Math.round(remainingTime / 60000)} min`);
+                                    etaRef.current = `${Math.round(remainingTime / 60000)} min`;
                                 } else {
-                                    setEta(`${Math.round(remainingTime / 1000)} sec`);
+                                    etaRef.current = `${Math.round(remainingTime / 1000)} sec`;
                                 }
                             }
                         }
                     );
 
                     // Mark as done
-                    setFiles(prev => prev.map((f, idx) =>
-                        idx === i ? { ...f, status: 'done' as const, progress: 100 } : f
-                    ));
+                    setFiles(prev => {
+                        const next = prev.map((f, idx) =>
+                            idx === i ? { ...f, status: 'done' as const, progress: 100 } : f
+                        );
+                        filesRef.current = next;
+                        return next;
+                    });
                 } catch (error) {
                     // Mark as error
-                    setFiles(prev => prev.map((f, idx) =>
-                        idx === i ? {
-                            ...f,
-                            status: 'error' as const,
-                            error: error instanceof Error ? error.message : 'Unknown error'
-                        } : f
-                    ));
+                    setFiles(prev => {
+                        const next = prev.map((f, idx) =>
+                            idx === i ? {
+                                ...f,
+                                status: 'error' as const,
+                                error: error instanceof Error ? error.message : 'Unknown error'
+                            } : f
+                        );
+                        filesRef.current = next;
+                        return next;
+                    });
                 }
             }
 
@@ -168,6 +227,35 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
     }, []);
 
     const currentFile = files[currentIndex];
+
+    // Worker Grid Component
+    const renderWorkers = () => {
+        if (workerStates.size === 0) return null;
+
+        const workers = Array.from(workerStates.entries()).sort((a, b) => a[0] - b[0]);
+
+        return (
+            <Box flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1} marginBottom={1}>
+                <Box marginBottom={1}>
+                    <Text bold color="blue">👷 Workers ({workers.length})</Text>
+                </Box>
+                <Box flexDirection="column">
+                    {workers.map(([id, state]) => (
+                        <Box key={id} marginBottom={0}>
+                            <Text dimColor>Worker {id}: </Text>
+                            <Text
+                                color={state.status === 'INFER' ? 'magenta' : state.status === 'ENCODE' ? 'cyan' : 'gray'}
+                                bold={state.status !== 'IDLE'}
+                            >
+                                {state.status.padEnd(7)}
+                            </Text>
+                            <Text> {state.details}</Text>
+                        </Box>
+                    ))}
+                </Box>
+            </Box>
+        );
+    };
 
     return (
         <Box flexDirection="column" paddingX={2}>
@@ -207,6 +295,9 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                     </Box>
                 </Box>
             )}
+
+            {/* Worker Monitor */}
+            {renderWorkers()}
 
             {/* Overall Progress Card */}
             <Box

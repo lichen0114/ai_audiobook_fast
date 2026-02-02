@@ -35,12 +35,13 @@ const speeds = [
     { label: '🚀 1.5x - Very Fast', value: '1.5' },
 ];
 
-type ConfigStep = 'voice' | 'speed' | 'gpu' | 'output' | 'output_custom' | 'confirm';
+type ConfigStep = 'voice' | 'speed' | 'workers' | 'gpu' | 'output' | 'output_custom' | 'confirm';
 
 export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelProps) {
     const [step, setStep] = useState<ConfigStep>('voice');
     const [selectedVoice, setSelectedVoice] = useState(config.voice);
     const [selectedSpeed, setSelectedSpeed] = useState(config.speed);
+    const [selectedWorkers, setSelectedWorkers] = useState(config.workers || 4);
     const [useMPS, setUseMPS] = useState(config.useMPS);
     const [outputDir, setOutputDir] = useState<string | null>(config.outputDir);
     const [customPath, setCustomPath] = useState('');
@@ -58,6 +59,11 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
 
     const handleSpeedSelect = (item: { value: string }) => {
         setSelectedSpeed(parseFloat(item.value));
+        setStep('workers');
+    };
+
+    const handleWorkerSelect = (item: { value: string }) => {
+        setSelectedWorkers(parseInt(item.value));
         setStep('gpu');
     };
 
@@ -89,6 +95,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                 ...config,
                 voice: selectedVoice,
                 speed: selectedSpeed,
+                workers: selectedWorkers,
                 useMPS,
                 outputDir,
             });
@@ -96,6 +103,8 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
             setStep('voice');
         } else if (item.value === 'speed') {
             setStep('speed');
+        } else if (item.value === 'workers') {
+            setStep('workers');
         } else if (item.value === 'gpu') {
             setStep('gpu');
         } else if (item.value === 'output') {
@@ -141,6 +150,9 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                         ⚡ Speed: <Text color={step === 'speed' ? 'yellow' : 'green'}>{getSpeedLabel(selectedSpeed)}</Text>
                     </Text>
                     <Text>
+                        🔨 Workers: <Text color={step === 'workers' ? 'yellow' : 'green'}>{selectedWorkers}</Text>
+                    </Text>
+                    <Text>
                         🍎 GPU (Apple Silicon): <Text color={step === 'gpu' ? 'yellow' : useMPS ? 'green' : 'gray'}>{useMPS ? 'Enabled ⚡' : 'Disabled'}</Text>
                     </Text>
                     <Text>
@@ -168,6 +180,26 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                             items={speeds}
                             onSelect={handleSpeedSelect}
                             initialIndex={speeds.findIndex(s => s.value === '1.0')}
+                        />
+                    </Box>
+                </Box>
+            )}
+
+            {/* Worker Selection */}
+            {step === 'workers' && (
+                <Box flexDirection="column">
+                    <Text color="yellow" bold>Select number of parallel workers:</Text>
+                    <Text dimColor>More workers = faster processing but higher CPU usage</Text>
+                    <Box marginTop={1}>
+                        <SelectInput
+                            items={[
+                                { label: '1 Worker (Low CPU)', value: '1' },
+                                { label: '2 Workers (Balanced)', value: '2' },
+                                { label: '4 Workers (Recommended)', value: '4' },
+                                { label: '8 Workers (Max Speed)', value: '8' },
+                            ]}
+                            onSelect={handleWorkerSelect}
+                            initialIndex={[1, 2, 4, 8].indexOf(selectedWorkers || 4)}
                         />
                     </Box>
                 </Box>
@@ -234,6 +266,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                                 { label: '✅ Start Processing', value: 'start' },
                                 { label: '🎙️  Change Voice', value: 'voice' },
                                 { label: '⚡ Change Speed', value: 'speed' },
+                                { label: '🔨 Change Workers', value: 'workers' },
                                 { label: '🍎 Toggle GPU Acceleration', value: 'gpu' },
                                 { label: '📁 Change Output Directory', value: 'output' },
                             ]}

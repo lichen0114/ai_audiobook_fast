@@ -150,15 +150,7 @@ async function getGpuInfo(): Promise<GpuStats> {
 export function GpuMonitor({ showSparkline = true, compact = false }: GpuMonitorProps) {
     const [stats, setStats] = useState<GpuStats | null>(null);
     const [history, setHistory] = useState<number[]>([]);
-    const [dots, setDots] = useState('');
 
-    // Animated loading dots
-    useEffect(() => {
-        const interval = setInterval(() => {
-            setDots(prev => prev.length >= 3 ? '' : prev + '.');
-        }, 300);
-        return () => clearInterval(interval);
-    }, []);
 
     // Fetch GPU stats periodically
     useEffect(() => {
@@ -177,7 +169,7 @@ export function GpuMonitor({ showSparkline = true, compact = false }: GpuMonitor
     if (!stats) {
         return (
             <Box borderStyle="round" borderColor="gray" paddingX={2} paddingY={1}>
-                <Text color="yellow">⏳ Loading GPU info{dots}</Text>
+                <Text color="yellow">⏳ Loading GPU info...</Text>
             </Box>
         );
     }
