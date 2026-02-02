@@ -1,4 +1,6 @@
-# EPUB → MP3 Generator (Kokoro TTS)
+# 🎧 Audiobook Maker
+
+> Transform your EPUBs into beautiful audiobooks using Kokoro TTS
 
 ![Audiobook Maker](photo.png)
 
