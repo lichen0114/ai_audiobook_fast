@@ -26,6 +26,8 @@ export interface FileJob {
     outputPath: string;
     status: 'pending' | 'processing' | 'done' | 'error';
     progress: number;
+    currentChunk?: number;
+    totalChunks?: number;
     error?: string;
     outputSize?: number; // in bytes
     processingTime?: number; // in ms

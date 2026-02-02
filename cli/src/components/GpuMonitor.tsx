@@ -204,6 +204,7 @@ export function GpuMonitor({ showSparkline = true, compact = false }: GpuMonitor
             borderColor="magenta"
             paddingX={2}
             paddingY={1}
+            width="100%"
         >
             {/* Header */}
             <Box marginBottom={1}>

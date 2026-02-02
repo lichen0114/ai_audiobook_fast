@@ -3,7 +3,7 @@ import { Box, Text, useApp, useInput } from 'ink';
 import Spinner from 'ink-spinner';
 import Gradient from 'ink-gradient';
 import type { FileJob, TTSConfig } from '../App.js';
-import { runTTS } from '../utils/tts-runner.js';
+import { runTTS, type ProgressInfo } from '../utils/tts-runner.js';
 import { GpuMonitor } from './GpuMonitor.js';
 import * as path from 'path';
 
@@ -73,6 +73,9 @@ function FileStatus({ file, isActive }: { file: FileJob; isActive?: boolean }) {
             {file.status === 'processing' && (
                 <Box marginLeft={3} marginTop={0}>
                     <ProgressBar progress={file.progress} width={25} />
+                    {file.currentChunk !== undefined && file.totalChunks !== undefined && (
+                        <Text dimColor> ({file.currentChunk}/{file.totalChunks} chunks)</Text>
+                    )}
                 </Box>
             )}
             {file.error && (
@@ -116,21 +119,28 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                         files[i].inputPath,
                         files[i].outputPath,
                         config,
-                        (progress) => {
+                        (progressInfo: ProgressInfo) => {
                             setFiles(prev => prev.map((f, idx) =>
-                                idx === i ? { ...f, progress } : f
+                                idx === i ? {
+                                    ...f,
+                                    progress: progressInfo.progress,
+                                    currentChunk: progressInfo.currentChunk,
+                                    totalChunks: progressInfo.totalChunks,
+                                } : f
                             ));
 
-                            // Update ETA
+                            // Update ETA based on chunks
                             const elapsed = Date.now() - startTime;
-                            const avgTimePerFile = elapsed / (i + progress / 100);
-                            const remainingFiles = files.length - i - 1 + (100 - progress) / 100;
-                            const remainingTime = avgTimePerFile * remainingFiles;
+                            if (progressInfo.totalChunks > 0 && progressInfo.currentChunk > 0) {
+                                const avgTimePerChunk = elapsed / progressInfo.currentChunk;
+                                const remainingChunks = progressInfo.totalChunks - progressInfo.currentChunk;
+                                const remainingTime = avgTimePerChunk * remainingChunks;
 
-                            if (remainingTime > 60000) {
-                                setEta(`${Math.round(remainingTime / 60000)} min`);
-                            } else {
-                                setEta(`${Math.round(remainingTime / 1000)} sec`);
+                                if (remainingTime > 60000) {
+                                    setEta(`${Math.round(remainingTime / 60000)} min`);
+                                } else {
+                                    setEta(`${Math.round(remainingTime / 1000)} sec`);
+                                }
                             }
                         }
                     );
@@ -182,6 +192,15 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                         <Text dimColor>Currently Processing: </Text>
                         <Text bold color="white">{path.basename(currentFile.inputPath)}</Text>
                     </Box>
+                    {currentFile.currentChunk !== undefined && currentFile.totalChunks !== undefined && (
+                        <Box marginTop={1}>
+                            <Text dimColor>Chunk: </Text>
+                            <Text bold color="yellow">{currentFile.currentChunk}</Text>
+                            <Text dimColor>/</Text>
+                            <Text>{currentFile.totalChunks}</Text>
+                            <Text dimColor> ({Math.round((currentFile.currentChunk / currentFile.totalChunks) * 100)}%)</Text>
+                        </Box>
+                    )}
                     <Box marginTop={1}>
                         <ProgressBar progress={currentFile.progress} width={35} />
                     </Box>

@@ -2,11 +2,17 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import type { TTSConfig } from '../App.js';
 
+export interface ProgressInfo {
+    progress: number;
+    currentChunk: number;
+    totalChunks: number;
+}
+
 export function runTTS(
     inputPath: string,
     outputPath: string,
     config: TTSConfig,
-    onProgress: (progress: number) => void
+    onProgress: (info: ProgressInfo) => void
 ): Promise<void> {
     return new Promise((resolve, reject) => {
         // Get the project root (parent of cli directory)
@@ -37,6 +43,7 @@ export function runTTS(
         });
 
         let lastProgress = 0;
+        let lastTotal = 0;
         let stderr = '';
 
         process.stdout.on('data', (data: Buffer) => {
@@ -49,9 +56,10 @@ export function runTTS(
                 const current = parseInt(chunkMatch[1], 10);
                 const total = parseInt(chunkMatch[2], 10);
                 const progress = Math.round((current / total) * 100);
-                if (progress > lastProgress) {
+                if (progress > lastProgress || total !== lastTotal) {
                     lastProgress = progress;
-                    onProgress(progress);
+                    lastTotal = total;
+                    onProgress({ progress, currentChunk: current, totalChunks: total });
                 }
             }
         });
@@ -65,9 +73,10 @@ export function runTTS(
                 const current = parseInt(chunkMatch[1], 10);
                 const total = parseInt(chunkMatch[2], 10);
                 const progress = Math.round((current / total) * 100);
-                if (progress > lastProgress) {
+                if (progress > lastProgress || total !== lastTotal) {
                     lastProgress = progress;
-                    onProgress(progress);
+                    lastTotal = total;
+                    onProgress({ progress, currentChunk: current, totalChunks: total });
                 }
             }
         });
@@ -78,7 +87,7 @@ export function runTTS(
 
         process.on('close', (code) => {
             if (code === 0) {
-                onProgress(100);
+                onProgress({ progress: 100, currentChunk: lastTotal, totalChunks: lastTotal });
                 resolve();
             } else {
                 reject(new Error(`Python process exited with code ${code}\n${stderr}`));
