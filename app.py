@@ -43,9 +43,75 @@ class TextChunk:
     text: str
 
 
+@dataclass
+class BookMetadata:
+    title: str
+    author: str
+    cover_image: Optional[bytes] = None
+    cover_mime_type: Optional[str] = None
+
+
+@dataclass
+class ChapterInfo:
+    title: str
+    start_sample: int
+    end_sample: int
+
+
 def _clean_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def extract_epub_metadata(epub_path: str) -> BookMetadata:
+    """Extract title, author, and cover image from EPUB file."""
+    book = epub.read_epub(epub_path)
+
+    # Extract title
+    title_meta = book.get_metadata('DC', 'title')
+    title = title_meta[0][0] if title_meta else "Unknown Title"
+
+    # Extract author
+    author_meta = book.get_metadata('DC', 'creator')
+    author = author_meta[0][0] if author_meta else "Unknown Author"
+
+    # Extract cover image
+    cover_image = None
+    cover_mime_type = None
+
+    # Try ITEM_COVER first
+    for item in book.get_items_of_type(ebooklib.ITEM_COVER):
+        cover_image = item.get_content()
+        cover_mime_type = item.media_type
+        break
+
+    # If no ITEM_COVER, look for cover in metadata
+    if cover_image is None:
+        cover_meta = book.get_metadata('OPF', 'cover')
+        if cover_meta:
+            cover_id = cover_meta[0][1].get('content') if cover_meta[0][1] else None
+            if cover_id:
+                for item in book.get_items():
+                    if item.get_id() == cover_id:
+                        cover_image = item.get_content()
+                        cover_mime_type = item.media_type
+                        break
+
+    # Fallback: look for image items with "cover" in name
+    if cover_image is None:
+        for item in book.get_items_of_type(ebooklib.ITEM_IMAGE):
+            item_name = item.get_name().lower()
+            if 'cover' in item_name:
+                cover_image = item.get_content()
+                cover_mime_type = item.media_type
+                break
+
+    return BookMetadata(
+        title=title,
+        author=author,
+        cover_image=cover_image,
+        cover_mime_type=cover_mime_type
+    )
 
 
 def extract_epub_text(epub_path: str) -> List[Tuple[str, str]]:
@@ -68,13 +134,26 @@ def extract_epub_text(epub_path: str) -> List[Tuple[str, str]]:
     return chapters
 
 
-def split_text_to_chunks(chapters: List[Tuple[str, str]], chunk_chars: int) -> List[TextChunk]:
+def split_text_to_chunks(
+    chapters: List[Tuple[str, str]], chunk_chars: int
+) -> Tuple[List[TextChunk], List[Tuple[int, str]]]:
+    """Split chapters into text chunks and track chapter boundaries.
+
+    Returns:
+        Tuple of (chunks, chapter_start_indices) where chapter_start_indices
+        is a list of (chunk_index, chapter_title) tuples indicating where
+        each chapter starts.
+    """
     chunks: List[TextChunk] = []
+    chapter_start_indices: List[Tuple[int, str]] = []
 
     for title, text in chapters:
         paragraphs = [p.strip() for p in re.split(r"\n+", text) if p.strip()]
         if not paragraphs:
             continue
+
+        # Record the chunk index where this chapter starts
+        chapter_start_indices.append((len(chunks), title))
 
         buffer = ""
         for paragraph in paragraphs:
@@ -88,7 +167,7 @@ def split_text_to_chunks(chapters: List[Tuple[str, str]], chunk_chars: int) -> L
         if buffer:
             chunks.append(TextChunk(title, buffer))
 
-    return chunks
+    return chunks, chapter_start_indices
 
 
 try:
@@ -129,6 +208,57 @@ def audio_to_segment(audio: np.ndarray, rate: int = DEFAULT_SAMPLE_RATE) -> Audi
         sample_width=2,
         channels=1,
     )
+
+
+def _escape_ffmetadata(text: str) -> str:
+    r"""Escape special characters for FFMETADATA format.
+
+    FFMETADATA1 requires escaping: =, ;, #, \, and newlines
+    """
+    text = text.replace('\\', '\\\\')  # Must be first
+    text = text.replace('=', '\\=')
+    text = text.replace(';', '\\;')
+    text = text.replace('#', '\\#')
+    text = text.replace('\n', '\\\n')
+    return text
+
+
+def generate_ffmetadata(
+    metadata: BookMetadata,
+    chapters: List[ChapterInfo],
+    sample_rate: int = DEFAULT_SAMPLE_RATE
+) -> str:
+    """Generate FFMETADATA1 format string with chapter markers.
+
+    Args:
+        metadata: Book metadata (title, author)
+        chapters: List of chapter info with sample positions
+        sample_rate: Audio sample rate for time conversion
+
+    Returns:
+        FFMETADATA1 formatted string
+    """
+    lines = [";FFMETADATA1"]
+
+    # Global metadata
+    lines.append(f"title={_escape_ffmetadata(metadata.title)}")
+    lines.append(f"artist={_escape_ffmetadata(metadata.author)}")
+    lines.append(f"album={_escape_ffmetadata(metadata.title)}")
+
+    # Chapter markers
+    for chapter in chapters:
+        # Convert samples to milliseconds (FFMETADATA uses ms as TIMEBASE)
+        start_ms = int((chapter.start_sample / sample_rate) * 1000)
+        end_ms = int((chapter.end_sample / sample_rate) * 1000)
+
+        lines.append("")
+        lines.append("[CHAPTER]")
+        lines.append("TIMEBASE=1/1000")
+        lines.append(f"START={start_ms}")
+        lines.append(f"END={end_ms}")
+        lines.append(f"title={_escape_ffmetadata(chapter.title)}")
+
+    return "\n".join(lines)
 
 
 def export_pcm_to_mp3(
@@ -172,10 +302,113 @@ def export_pcm_to_mp3(
         raise RuntimeError(f"ffmpeg failed: {proc.stderr.decode()}")
 
 
+def export_pcm_to_m4b(
+    pcm_data: np.ndarray,
+    output_path: str,
+    metadata: BookMetadata,
+    chapters: List[ChapterInfo],
+    sample_rate: int = DEFAULT_SAMPLE_RATE,
+    bitrate: str = "192k",
+) -> None:
+    """Export raw PCM int16 data to M4B with chapters and cover art via ffmpeg.
+
+    Args:
+        pcm_data: Audio data as int16 numpy array
+        output_path: Path to output M4B file
+        metadata: Book metadata including optional cover image
+        chapters: List of chapter markers
+        sample_rate: Audio sample rate
+        bitrate: Audio bitrate for AAC encoding
+    """
+    import tempfile
+
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path is None:
+        raise FileNotFoundError(
+            "ffmpeg not found. Install with: brew install ffmpeg"
+        )
+
+    if pcm_data.dtype != np.int16:
+        pcm_data = pcm_data.astype(np.int16)
+
+    # Create temp files for metadata and optional cover
+    temp_files = []
+    try:
+        # Write FFMETADATA file
+        metadata_content = generate_ffmetadata(metadata, chapters, sample_rate)
+        metadata_file = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.txt', delete=False
+        )
+        metadata_file.write(metadata_content)
+        metadata_file.close()
+        temp_files.append(metadata_file.name)
+
+        # Build ffmpeg command
+        cmd = [
+            ffmpeg_path,
+            "-f", "s16le",           # signed 16-bit little-endian
+            "-ar", str(sample_rate),
+            "-ac", "1",              # mono
+            "-i", "pipe:0",          # stdin (audio)
+            "-i", metadata_file.name,  # metadata file
+        ]
+
+        # Add cover image if available
+        cover_file = None
+        if metadata.cover_image:
+            # Determine extension from mime type
+            ext = '.jpg'
+            if metadata.cover_mime_type:
+                if 'png' in metadata.cover_mime_type:
+                    ext = '.png'
+                elif 'gif' in metadata.cover_mime_type:
+                    ext = '.gif'
+
+            cover_file = tempfile.NamedTemporaryFile(
+                suffix=ext, delete=False
+            )
+            cover_file.write(metadata.cover_image)
+            cover_file.close()
+            temp_files.append(cover_file.name)
+            cmd.extend(["-i", cover_file.name])
+
+        # Mapping and encoding options
+        cmd.extend([
+            "-map", "0:a",              # Map audio from stdin
+            "-map_metadata", "1",       # Map metadata from metadata file
+        ])
+
+        if cover_file:
+            cmd.extend([
+                "-map", "2:v",          # Map cover image
+                "-c:v", "copy",         # Copy cover without re-encoding
+                "-disposition:v:0", "attached_pic",
+            ])
+
+        cmd.extend([
+            "-c:a", "aac",              # AAC audio codec
+            "-b:a", bitrate,
+            "-movflags", "+faststart",  # Enable streaming
+            "-y", output_path,
+        ])
+
+        proc = subprocess.run(cmd, input=pcm_data.tobytes(), capture_output=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg failed: {proc.stderr.decode()}")
+
+    finally:
+        # Clean up temp files
+        for temp_file in temp_files:
+            try:
+                os.remove(temp_file)
+            except OSError:
+                pass
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="EPUB to MP3 using Kokoro TTS")
+    parser = argparse.ArgumentParser(description="EPUB to audiobook using Kokoro TTS")
     parser.add_argument("--input", required=True, help="Path to input EPUB")
-    parser.add_argument("--output", required=True, help="Path to output MP3")
+    parser.add_argument("--output", required=True, help="Path to output file (MP3 or M4B)")
     parser.add_argument("--voice", default="af_heart", help="Kokoro voice")
     parser.add_argument("--lang_code", default="a", help="Kokoro language code")
     parser.add_argument("--speed", type=float, default=1.0, help="Speech speed")
@@ -207,6 +440,12 @@ def parse_args() -> argparse.Namespace:
         default="pytorch",
         help="TTS backend to use (default: pytorch)",
     )
+    parser.add_argument(
+        "--format",
+        choices=["mp3", "m4b"],
+        default="mp3",
+        help="Output format: mp3 (default) or m4b (with chapters)",
+    )
     return parser.parse_args()
 
 
@@ -227,11 +466,17 @@ def main() -> None:
     # Phase: Parsing
     print("PHASE:PARSING", flush=True)
     chapters = extract_epub_text(args.input)
-    chunks = split_text_to_chunks(chapters, chunk_chars)
+    chunks, chapter_start_indices = split_text_to_chunks(chapters, chunk_chars)
+
+    # Extract book metadata for M4B format
+    book_metadata = None
+    if args.format == "m4b":
+        book_metadata = extract_epub_metadata(args.input)
 
     # Emit metadata about extracted text
     total_chars = sum(len(chunk.text) for chunk in chunks)
     print(f"METADATA:total_chars:{total_chars}", flush=True)
+    print(f"METADATA:chapter_count:{len(chapter_start_indices)}", flush=True)
 
     if not chunks:
         raise ValueError("No text chunks produced from EPUB.")
@@ -346,16 +591,46 @@ def main() -> None:
     # Phase: Concatenating
     print("PHASE:CONCATENATING", flush=True)
     # O(n) concatenation: collect all int16 arrays, concatenate once
+    # Also track cumulative samples per chunk for chapter markers
     print("Concatenating audio segments...", flush=True)
     all_arrays: List[np.ndarray] = []
+    chunk_sample_offsets: List[int] = []  # Sample offset where each chunk starts
+    cumulative_samples = 0
+
     for idx in range(total_chunks):
+        chunk_sample_offsets.append(cumulative_samples)
         if idx in results_dict:
-            all_arrays.extend(results_dict[idx])
+            for arr in results_dict[idx]:
+                all_arrays.append(arr)
+                cumulative_samples += len(arr)
 
     if all_arrays:
         combined_np = np.concatenate(all_arrays)
     else:
         combined_np = np.array([], dtype=np.int16)
+
+    total_samples = len(combined_np)
+
+    # Build chapter info for M4B
+    chapter_infos: List[ChapterInfo] = []
+    if args.format == "m4b" and chapter_start_indices:
+        for i, (chunk_idx, title) in enumerate(chapter_start_indices):
+            start_sample = chunk_sample_offsets[chunk_idx] if chunk_idx < len(chunk_sample_offsets) else 0
+
+            # End sample is the start of the next chapter, or end of audio
+            if i + 1 < len(chapter_start_indices):
+                next_chunk_idx = chapter_start_indices[i + 1][0]
+                end_sample = chunk_sample_offsets[next_chunk_idx] if next_chunk_idx < len(chunk_sample_offsets) else total_samples
+            else:
+                end_sample = total_samples
+
+            # Use chapter title, falling back to a numbered chapter
+            chapter_title = title if title else f"Chapter {i + 1}"
+            chapter_infos.append(ChapterInfo(
+                title=chapter_title,
+                start_sample=start_sample,
+                end_sample=end_sample
+            ))
 
     output_dir = os.path.dirname(os.path.abspath(args.output))
     if output_dir and not os.path.exists(output_dir):
@@ -363,7 +638,17 @@ def main() -> None:
 
     # Phase: Exporting
     print("PHASE:EXPORTING", flush=True)
-    export_pcm_to_mp3(combined_np, args.output, sample_rate=sample_rate, bitrate="192k")
+    if args.format == "m4b":
+        export_pcm_to_m4b(
+            combined_np,
+            args.output,
+            metadata=book_metadata,
+            chapters=chapter_infos,
+            sample_rate=sample_rate,
+            bitrate="192k"
+        )
+    else:
+        export_pcm_to_mp3(combined_np, args.output, sample_rate=sample_rate, bitrate="192k")
 
     avg_time = sum(times) / max(len(times), 1)
 

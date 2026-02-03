@@ -19,6 +19,7 @@ export interface ProgressInfo {
     chunkTimingMs?: number;  // Per-chunk timing in ms
     heartbeatTs?: number;    // Heartbeat timestamp
     totalChars?: number;     // Total characters in EPUB
+    chapterCount?: number;   // Number of chapters in EPUB
 }
 
 export function runTTS(
@@ -45,6 +46,7 @@ export function runTTS(
             '--chunk_chars', config.chunkChars.toString(),
             '--workers', (config.workers || 2).toString(),
             '--backend', config.backend || 'pytorch',
+            '--format', config.outputFormat || 'mp3',
             '--no_rich', // Disable rich progress bar to prevent CLI flashing
         ];
 
@@ -73,6 +75,7 @@ export function runTTS(
         let lastTotal = 0;
         let lastPhase: ProcessingPhase | undefined;
         let lastTotalChars: number | undefined;
+        let lastChapterCount: number | undefined;
         let stderr = '';
         const MAX_STDERR = 10000;
 
@@ -107,6 +110,21 @@ export function runTTS(
                         totalChunks: lastTotal,
                         phase: lastPhase,
                         totalChars,
+                        chapterCount: lastChapterCount,
+                    });
+                }
+
+                // METADATA:chapter_count:10
+                if (line.startsWith('METADATA:chapter_count:')) {
+                    const chapterCount = parseInt(line.slice(23), 10);
+                    lastChapterCount = chapterCount;
+                    onProgress({
+                        progress: lastProgress,
+                        currentChunk: lastCurrentChunk,
+                        totalChunks: lastTotal,
+                        phase: lastPhase,
+                        totalChars: lastTotalChars,
+                        chapterCount,
                     });
                 }
 

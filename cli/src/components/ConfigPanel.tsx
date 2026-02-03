@@ -48,13 +48,19 @@ const backends = [
     { label: '⚡ MLX (Faster - Experimental)', value: 'mlx' },
 ];
 
-type ConfigStep = 'voice' | 'speed' | 'backend' | 'workers' | 'gpu' | 'output' | 'output_custom' | 'confirm';
+const formats = [
+    { label: '🎵 MP3 (Standard)', value: 'mp3' },
+    { label: '📖 M4B (With Chapters)', value: 'm4b' },
+];
+
+type ConfigStep = 'voice' | 'speed' | 'backend' | 'format' | 'workers' | 'gpu' | 'output' | 'output_custom' | 'confirm';
 
 export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelProps) {
     const [step, setStep] = useState<ConfigStep>('voice');
     const [selectedVoice, setSelectedVoice] = useState(config.voice);
     const [selectedSpeed, setSelectedSpeed] = useState(config.speed);
     const [selectedBackend, setSelectedBackend] = useState<'pytorch' | 'mlx'>(config.backend || 'pytorch');
+    const [selectedFormat, setSelectedFormat] = useState<'mp3' | 'm4b'>(config.outputFormat || 'mp3');
     const [selectedChunkChars, setSelectedChunkChars] = useState(config.chunkChars || BACKEND_CHUNK_CHARS[config.backend || 'pytorch']);
     const [selectedWorkers, setSelectedWorkers] = useState(config.workers || 2);
     const [useMPS, setUseMPS] = useState(config.useMPS);
@@ -82,13 +88,17 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
         setSelectedBackend(backend);
         // Update chunk size to optimal value for selected backend
         setSelectedChunkChars(BACKEND_CHUNK_CHARS[backend]);
-        // MLX natively uses Apple Silicon, so skip GPU step
+        // MLX natively uses Apple Silicon
         if (backend === 'mlx') {
             setUseMPS(true); // MLX always uses Apple Silicon
-            setStep('workers');
-        } else {
-            setStep('workers');
         }
+        setStep('format');
+    };
+
+    const handleFormatSelect = (item: { value: string }) => {
+        const format = item.value as 'mp3' | 'm4b';
+        setSelectedFormat(format);
+        setStep('workers');
     };
 
     const handleWorkerSelect = (item: { value: string }) => {
@@ -130,6 +140,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                 voice: selectedVoice,
                 speed: selectedSpeed,
                 backend: selectedBackend,
+                outputFormat: selectedFormat,
                 chunkChars: selectedChunkChars,
                 workers: selectedWorkers,
                 useMPS,
@@ -141,6 +152,8 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
             setStep('speed');
         } else if (item.value === 'backend') {
             setStep('backend');
+        } else if (item.value === 'format') {
+            setStep('format');
         } else if (item.value === 'workers') {
             setStep('workers');
         } else if (item.value === 'gpu') {
@@ -158,6 +171,9 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
 
     const getBackendLabel = (value: string) =>
         backends.find(b => b.value === value)?.label || value;
+
+    const getFormatLabel = (value: string) =>
+        formats.find(f => f.value === value)?.label || value;
 
     const getOutputLabel = () => {
         if (!outputDir) return 'Same as input file';
@@ -192,6 +208,9 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                     </Text>
                     <Text>
                         🧠 Backend: <Text color={step === 'backend' ? 'yellow' : 'green'}>{getBackendLabel(selectedBackend)}</Text>
+                    </Text>
+                    <Text>
+                        💾 Format: <Text color={step === 'format' ? 'yellow' : 'green'}>{getFormatLabel(selectedFormat)}</Text>
                     </Text>
                     <Text>
                         🔨 Workers: <Text color={step === 'workers' ? 'yellow' : 'green'}>{selectedWorkers}</Text>
@@ -239,6 +258,21 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                             items={backends}
                             onSelect={handleBackendSelect}
                             initialIndex={backends.findIndex(b => b.value === selectedBackend)}
+                        />
+                    </Box>
+                </Box>
+            )}
+
+            {/* Format Selection */}
+            {step === 'format' && (
+                <Box flexDirection="column">
+                    <Text color="yellow" bold>Select output format:</Text>
+                    <Text dimColor>M4B includes chapter markers and book metadata</Text>
+                    <Box marginTop={1}>
+                        <SelectInput
+                            items={formats}
+                            onSelect={handleFormatSelect}
+                            initialIndex={formats.findIndex(f => f.value === selectedFormat)}
                         />
                     </Box>
                 </Box>
@@ -325,6 +359,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                                 { label: '🎙️  Change Voice', value: 'voice' },
                                 { label: '⚡ Change Speed', value: 'speed' },
                                 { label: '🧠 Change Backend', value: 'backend' },
+                                { label: '💾 Change Format', value: 'format' },
                                 { label: '🔨 Change Workers', value: 'workers' },
                                 ...(selectedBackend === 'pytorch' ? [{ label: '🍎 Toggle GPU Acceleration', value: 'gpu' }] : []),
                                 { label: '📁 Change Output Directory', value: 'output' },

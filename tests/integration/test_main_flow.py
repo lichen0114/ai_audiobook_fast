@@ -31,7 +31,7 @@ class TestMainFlow:
         assert len(chapters) >= 1
 
         # Split into chunks
-        chunks = split_text_to_chunks(chapters, chunk_chars=500)
+        chunks, chapter_starts = split_text_to_chunks(chapters, chunk_chars=500)
 
         assert len(chunks) >= 1
 
@@ -148,7 +148,7 @@ class TestChunkingEdgeCases:
         long_text = "A" * 5000
         chapters = [("Ch1", long_text)]
 
-        chunks = split_text_to_chunks(chapters, chunk_chars=1000)
+        chunks, chapter_starts = split_text_to_chunks(chapters, chunk_chars=1000)
 
         # Single paragraph kept whole
         assert len(chunks) == 1
@@ -161,7 +161,7 @@ class TestChunkingEdgeCases:
         text = "\n\n".join(paragraphs)
         chapters = [("Ch1", text)]
 
-        chunks = split_text_to_chunks(chapters, chunk_chars=500)
+        chunks, chapter_starts = split_text_to_chunks(chapters, chunk_chars=500)
 
         # Should be multiple chunks, each combining several paragraphs
         assert len(chunks) > 1
@@ -179,7 +179,7 @@ class TestChunkingEdgeCases:
         text = "\n\n".join(paragraphs)
         chapters = [("Ch1", text)]
 
-        chunks = split_text_to_chunks(chapters, chunk_chars=500)
+        chunks, chapter_starts = split_text_to_chunks(chapters, chunk_chars=500)
 
         # Long paragraph should be its own chunk
         long_chunk = [c for c in chunks if len(c.text) > 1000]

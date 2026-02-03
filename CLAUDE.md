@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AI Audiobook Fast converts EPUB files into MP3 audiobooks using Kokoro TTS. It has a two-tier architecture:
+AI Audiobook Fast converts EPUB files into MP3 or M4B audiobooks using Kokoro TTS. It has a two-tier architecture:
 - **Frontend CLI** (`cli/`): Node.js/TypeScript/React terminal UI using Ink
 - **Backend** (`app.py`): Python script handling EPUB parsing and TTS generation
 
@@ -49,6 +49,7 @@ npm run test:coverage           # With coverage
 ```bash
 python app.py --input book.epub --output book.mp3 --voice af_heart --speed 1.0
 python app.py --backend mlx --input book.epub --output book.mp3  # MLX backend (faster)
+python app.py --format m4b --input book.epub --output book.m4b   # M4B with chapters
 ```
 
 ## Architecture
@@ -69,15 +70,25 @@ The `--backend` flag selects which backend to use (`pytorch` or `mlx`). MLX requ
 
 ### Backend (`app.py`)
 Sequential inference + background encoding pipeline:
-1. Extract EPUB text, split into chunks (default: 900 chars for MLX, 600 for PyTorch; configurable via `--chunk_chars`)
+1. Extract EPUB text and metadata, split into chunks (default: 900 chars for MLX, 600 for PyTorch)
 2. Backend generates audio sequentially, queues for encoding
 3. Background thread(s) convert audio to int16 numpy arrays (`--workers` controls parallelism)
-4. Results concatenated with `np.concatenate()` (O(n) vs O(n²))
-5. Raw PCM piped to ffmpeg for MP3 export (bypasses WAV 4GB limit)
+4. Results concatenated with `np.concatenate()` (O(n) vs O(n²)), tracking chapter sample positions
+5. Raw PCM piped to ffmpeg for MP3/M4B export (bypasses WAV 4GB limit)
 
 **Why sequential GPU?** MPS serializes GPU operations; threading is 0.88x slower.
 
 **Why direct ffmpeg?** pydub creates intermediate WAV files with a 4GB limit (~24.9 hours). Long audiobooks exceed this.
+
+### Output Formats
+- **MP3** (default): Standard audio format
+- **M4B**: Audiobook format with embedded chapter markers, book metadata (title/author), and cover art extracted from EPUB
+
+Key M4B functions in `app.py`:
+- `extract_epub_metadata()` - Extracts title, author, cover from EPUB
+- `generate_ffmetadata()` - Creates FFMETADATA1 format for chapter markers
+- `export_pcm_to_m4b()` - Pipes PCM to ffmpeg with AAC encoding + chapters + cover
+- `split_text_to_chunks()` - Returns `(chunks, chapter_start_indices)` tuple for chapter tracking
 
 ### IPC Protocol
 Python outputs to stdout, parsed by `tts-runner.ts`:
@@ -85,8 +96,9 @@ Python outputs to stdout, parsed by `tts-runner.ts`:
 PHASE:PARSING              # Before text extraction
 PHASE:INFERENCE            # Before inference loop
 PHASE:CONCATENATING        # Before np.concatenate()
-PHASE:EXPORTING            # Before MP3 export
+PHASE:EXPORTING            # Before MP3/M4B export
 METADATA:total_chars:N     # Character count
+METADATA:chapter_count:N   # Number of chapters
 WORKER:0:INFER:Chunk X/Y   # Per-chunk status
 TIMING:chunk_idx:ms        # Per-chunk timing
 HEARTBEAT:timestamp        # Every 5 seconds

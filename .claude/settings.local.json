@@ -30,7 +30,12 @@
       "Bash(pytest:*)",
       "Bash(npx tsc:*)",
       "Bash(python app.py:*)",
-      "Bash(ffprobe:*)"
+      "Bash(ffprobe:*)",
+      "Bash(unzip:*)",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:fmartingr.com)",
+      "WebFetch(domain:hhsprings.bitbucket.io)",
+      "WebFetch(domain:docs.sourcefabric.org)"
     ]
   }
 }

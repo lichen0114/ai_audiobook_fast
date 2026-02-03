@@ -23,6 +23,7 @@ export interface TTSConfig {
     outputDir: string | null; // null means same directory as input
     workers: number; // Number of parallel workers for audio encoding
     backend: 'pytorch' | 'mlx'; // TTS backend to use
+    outputFormat: 'mp3' | 'm4b'; // Output format
 }
 
 export interface FileJob {
@@ -58,6 +59,7 @@ const defaultConfig: TTSConfig = {
     outputDir: null,
     workers: 2, // Use 2 parallel workers by default (optimal for Apple Silicon MPS)
     backend: 'pytorch', // Default to PyTorch backend
+    outputFormat: 'mp3', // Default to MP3 format
 };
 
 function formatBytes(bytes: number): string {
@@ -136,10 +138,11 @@ export function App() {
     });
 
     const handleFilesSelected = (selectedFiles: string[]) => {
+        const ext = config.outputFormat === 'm4b' ? '.m4b' : '.mp3';
         const jobs: FileJob[] = selectedFiles.map((file, index) => ({
             id: `job-${index}`,
             inputPath: file,
-            outputPath: file.replace(/\.epub$/i, '.mp3'),
+            outputPath: file.replace(/\.epub$/i, ext),
             status: 'pending',
             progress: 0,
         }));
@@ -148,16 +151,15 @@ export function App() {
     };
 
     const handleConfigConfirm = (newConfig: TTSConfig) => {
-        // Update output paths if custom directory is set
-        if (newConfig.outputDir) {
-            setFiles(prev => prev.map(file => ({
-                ...file,
-                outputPath: path.join(
-                    newConfig.outputDir!,
-                    path.basename(file.inputPath).replace(/\.epub$/i, '.mp3')
-                ),
-            })));
-        }
+        const ext = newConfig.outputFormat === 'm4b' ? '.m4b' : '.mp3';
+        // Update output paths based on format and custom directory
+        setFiles(prev => prev.map(file => {
+            const baseName = path.basename(file.inputPath).replace(/\.epub$/i, ext);
+            const outputPath = newConfig.outputDir
+                ? path.join(newConfig.outputDir, baseName)
+                : file.inputPath.replace(/\.epub$/i, ext);
+            return { ...file, outputPath };
+        }));
         setConfig(newConfig);
         setStartTime(Date.now());
         setScreen('processing');
