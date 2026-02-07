@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import * as path from 'path';
 import type { TTSConfig } from '../App.js';
 
@@ -20,6 +20,37 @@ export interface ProgressInfo {
     heartbeatTs?: number;    // Heartbeat timestamp
     totalChars?: number;     // Total characters in EPUB
     chapterCount?: number;   // Number of chapters in EPUB
+    backendResolved?: 'pytorch' | 'mlx';
+}
+
+function resolveBackendForEnv(config: TTSConfig, projectRoot: string, venvPython: string): 'pytorch' | 'mlx' {
+    if (config.backend === 'pytorch' || config.backend === 'mlx') {
+        return config.backend;
+    }
+
+    if (!(process.platform === 'darwin' && process.arch === 'arm64')) {
+        return 'pytorch';
+    }
+
+    try {
+        const probe = spawnSync(
+            venvPython,
+            ['-c', 'import mlx.core as mx; mx.array([1.0]); print("mlx")'],
+            {
+                cwd: projectRoot,
+                encoding: 'utf-8',
+                timeout: 5000,
+            }
+        );
+
+        if (probe.status === 0 && probe.stdout.trim() === 'mlx') {
+            return 'mlx';
+        }
+    } catch {
+        // Ignore probe failures and use conservative fallback.
+    }
+
+    return 'pytorch';
 }
 
 export function runTTS(
@@ -35,6 +66,7 @@ export function runTTS(
 
         // Check if we're in a virtual environment
         const venvPython = path.join(projectRoot, '.venv', 'bin', 'python');
+        const backendForEnv = resolveBackendForEnv(config, projectRoot, venvPython);
 
         const args = [
             pythonScript,
@@ -45,20 +77,21 @@ export function runTTS(
             '--lang_code', config.langCode,
             '--chunk_chars', config.chunkChars.toString(),
             '--workers', (config.workers || 2).toString(),
-            '--backend', config.backend || 'pytorch',
+            '--backend', config.backend || 'auto',
             '--format', config.outputFormat || 'mp3',
             '--bitrate', config.bitrate || '192k',
             ...(config.normalize ? ['--normalize'] : []),
             ...(config.metadataTitle ? ['--title', config.metadataTitle] : []),
             ...(config.metadataAuthor ? ['--author', config.metadataAuthor] : []),
             ...(config.metadataCover ? ['--cover', config.metadataCover] : []),
+            ...(config.checkpointEnabled ? ['--checkpoint'] : []),
             ...(config.resume ? ['--resume'] : []),
             ...(config.noCheckpoint ? ['--no_checkpoint'] : []),
             '--no_rich', // Disable rich progress bar to prevent CLI flashing
         ];
 
         // Only set PyTorch MPS env vars for the pytorch backend
-        const isPyTorchBackend = (config.backend || 'pytorch') === 'pytorch';
+        const isPyTorchBackend = backendForEnv === 'pytorch';
         const mpsEnvVars = isPyTorchBackend && config.useMPS ? {
             PYTORCH_ENABLE_MPS_FALLBACK: '1',
             // MPS memory optimization - aggressive cleanup for 8GB Macs
@@ -83,6 +116,7 @@ export function runTTS(
         let lastPhase: ProcessingPhase | undefined;
         let lastTotalChars: number | undefined;
         let lastChapterCount: number | undefined;
+        let lastBackendResolved: 'pytorch' | 'mlx' | undefined;
         let stderr = '';
         const MAX_STDERR = 10000;
 
@@ -107,6 +141,23 @@ export function runTTS(
                 }
 
                 // Parse metadata
+                // METADATA:backend_resolved:mlx
+                if (line.startsWith('METADATA:backend_resolved:')) {
+                    const backendResolved = line.slice(26);
+                    if (backendResolved === 'pytorch' || backendResolved === 'mlx') {
+                        lastBackendResolved = backendResolved;
+                        onProgress({
+                            progress: lastProgress,
+                            currentChunk: lastCurrentChunk,
+                            totalChunks: lastTotal,
+                            phase: lastPhase,
+                            totalChars: lastTotalChars,
+                            chapterCount: lastChapterCount,
+                            backendResolved,
+                        });
+                    }
+                }
+
                 // METADATA:total_chars:12345
                 if (line.startsWith('METADATA:total_chars:')) {
                     const totalChars = parseInt(line.slice(21), 10);
@@ -118,6 +169,7 @@ export function runTTS(
                         phase: lastPhase,
                         totalChars,
                         chapterCount: lastChapterCount,
+                        backendResolved: lastBackendResolved,
                     });
                 }
 
@@ -132,6 +184,7 @@ export function runTTS(
                         phase: lastPhase,
                         totalChars: lastTotalChars,
                         chapterCount,
+                        backendResolved: lastBackendResolved,
                     });
                 }
 
@@ -148,6 +201,7 @@ export function runTTS(
                             phase: lastPhase,
                             chunkTimingMs,
                             totalChars: lastTotalChars,
+                            backendResolved: lastBackendResolved,
                         });
                     }
                 }
@@ -163,6 +217,7 @@ export function runTTS(
                         phase: lastPhase,
                         heartbeatTs,
                         totalChars: lastTotalChars,
+                        backendResolved: lastBackendResolved,
                     });
                 }
 
@@ -182,6 +237,7 @@ export function runTTS(
                             phase: lastPhase,
                             workerStatus: { id, status, details },
                             totalChars: lastTotalChars,
+                            backendResolved: lastBackendResolved,
                         });
                     }
                 }
@@ -203,6 +259,7 @@ export function runTTS(
                         totalChunks: total,
                         phase: lastPhase,
                         totalChars: lastTotalChars,
+                        backendResolved: lastBackendResolved,
                     });
                 }
             }

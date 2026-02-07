@@ -31,6 +31,13 @@ function parseErrorMessage(error: string): string {
     if (errorLower.includes('permission denied')) {
         return 'Permission denied - check file/folder permissions';
     }
+    if (
+        errorLower.includes('no space left on device') ||
+        errorLower.includes('disk full') ||
+        errorLower.includes('errno 28')
+    ) {
+        return 'Disk is full - free up space and try again';
+    }
     if (errorLower.includes('no readable text') || errorLower.includes('no text chunks')) {
         return 'EPUB has no readable text content';
     }
@@ -102,6 +109,11 @@ describe('BatchProgress', () => {
             it('should parse permission denied errors', () => {
                 const result = parseErrorMessage('Permission denied: /path/to/file');
                 expect(result).toBe('Permission denied - check file/folder permissions');
+            });
+
+            it('should parse disk full errors', () => {
+                const result = parseErrorMessage('OSError: [Errno 28] No space left on device');
+                expect(result).toBe('Disk is full - free up space and try again');
             });
 
             it('should parse no readable text errors', () => {

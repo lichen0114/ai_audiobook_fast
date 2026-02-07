@@ -121,7 +121,7 @@ def verify_checkpoint(checkpoint_dir: str, epub_path: str, config: Dict[str, Any
 
     # Verify key config options match
     # Only check options that affect audio output
-    key_options = ['voice', 'speed', 'lang_code', 'backend']
+    key_options = ['voice', 'speed', 'lang_code', 'backend', 'chunk_chars']
     for key in key_options:
         if state.config.get(key) != config.get(key):
             return False

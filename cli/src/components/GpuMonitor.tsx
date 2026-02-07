@@ -74,94 +74,117 @@ function Sparkline({ data, width = 15 }: { data: number[]; width?: number }) {
     );
 }
 
-async function getGpuInfo(): Promise<GpuStats> {
+async function getStaticGpuInfo(): Promise<Omit<GpuStats, 'usage' | 'memoryUsed'>> {
+    let gpuName = 'Unknown GPU';
+    let gpuCores = 0;
+
     try {
-        // Get GPU info from system_profiler
-        const { stdout: gpuInfo } = await execAsync('system_profiler SPDisplaysDataType -json');
+        // system_profiler is expensive; call once and cache in component state.
+        const { stdout: gpuInfo } = await execAsync('system_profiler SPDisplaysDataType -json', { timeout: 12000 });
         const data = JSON.parse(gpuInfo);
         const gpu = data.SPDisplaysDataType?.[0];
-
-        const gpuName = gpu?.sppci_model || 'Unknown GPU';
-        const isAppleSilicon = gpuName.includes('Apple') || gpuName.includes('M1') ||
-            gpuName.includes('M2') || gpuName.includes('M3') ||
-            gpuName.includes('M4');
-
-        // Extract core count from name (e.g., "Apple M2 Pro (19-core GPU)")
+        gpuName = gpu?.sppci_model || gpuName;
         const coreMatch = gpuName.match(/(\d+)-core/);
-        const gpuCores = coreMatch ? parseInt(coreMatch[1]) : 8;
-
-        // Get memory info
-        let memoryTotal = 0;
-        let memoryUsed = 0;
-
-        try {
-            const { stdout: memInfo } = await execAsync('sysctl hw.memsize');
-            const totalBytes = parseInt(memInfo.split(':')[1].trim());
-            memoryTotal = Math.round(totalBytes / (1024 * 1024 * 1024)); // GB
-
-            // Get approximate GPU memory usage from vm_stat
-            const { stdout: vmStat } = await execAsync('vm_stat');
-            const wiredMatch = vmStat.match(/Pages wired down:\s+(\d+)/);
-            if (wiredMatch) {
-                memoryUsed = Math.round((parseInt(wiredMatch[1]) * 4096) / (1024 * 1024 * 1024)); // GB
-            }
-        } catch {
-            // Default values if memory info unavailable
-            memoryTotal = 16;
-            memoryUsed = 4;
-        }
-
-        // Estimate GPU usage based on process activity
-        // This is an approximation since macOS doesn't expose GPU usage directly without sudo
-        let usage = 0;
-        try {
-            const { stdout: topOutput } = await execAsync('top -l 1 -n 0 -stats cpu');
-            const cpuMatch = topOutput.match(/CPU usage:\s+([\d.]+)%\s+user/);
-            if (cpuMatch) {
-                // When MPS is active, GPU usage correlates with high CPU activity
-                // This is a rough estimation
-                const cpuUsage = parseFloat(cpuMatch[1]);
-                usage = Math.min(cpuUsage * 0.8, 100); // Approximate GPU based on CPU
-            }
-        } catch {
-            usage = 0;
-        }
-
-        return {
-            gpuName,
-            gpuCores,
-            usage,
-            memoryUsed,
-            memoryTotal,
-            isAppleSilicon,
-        };
-    } catch (error) {
-        return {
-            gpuName: 'Unknown GPU',
-            gpuCores: 0,
-            usage: 0,
-            memoryUsed: 0,
-            memoryTotal: 0,
-            isAppleSilicon: false,
-        };
+        gpuCores = coreMatch ? parseInt(coreMatch[1], 10) : 8;
+    } catch {
+        // Keep fallback values.
     }
+
+    let memoryTotal = 16;
+    try {
+        const { stdout: memInfo } = await execAsync('sysctl hw.memsize', { timeout: 3000 });
+        const totalBytes = parseInt(memInfo.split(':')[1].trim(), 10);
+        memoryTotal = Math.round(totalBytes / (1024 * 1024 * 1024)); // GB
+    } catch {
+        // Keep fallback value.
+    }
+
+    const isAppleSilicon = gpuName.includes('Apple') || gpuName.includes('M1') ||
+        gpuName.includes('M2') || gpuName.includes('M3') ||
+        gpuName.includes('M4');
+
+    return {
+        gpuName,
+        gpuCores,
+        memoryTotal,
+        isAppleSilicon,
+    };
+}
+
+async function getDynamicGpuStats(memoryTotal: number): Promise<Pick<GpuStats, 'usage' | 'memoryUsed'>> {
+    let memoryUsed = 0;
+    let usage = 0;
+
+    try {
+        const { stdout: vmStat } = await execAsync('vm_stat', { timeout: 3000 });
+        const wiredMatch = vmStat.match(/Pages wired down:\s+(\d+)/);
+        if (wiredMatch) {
+            memoryUsed = Math.round((parseInt(wiredMatch[1], 10) * 4096) / (1024 * 1024 * 1024)); // GB
+        }
+    } catch {
+        memoryUsed = Math.max(1, Math.round(memoryTotal * 0.25));
+    }
+
+    try {
+        const { stdout: topOutput } = await execAsync('top -l 1 -n 0 -stats cpu', { timeout: 3000 });
+        const cpuMatch = topOutput.match(/CPU usage:\s+([\d.]+)%\s+user/);
+        if (cpuMatch) {
+            const cpuUsage = parseFloat(cpuMatch[1]);
+            usage = Math.min(cpuUsage * 0.8, 100);
+        }
+    } catch {
+        usage = 0;
+    }
+
+    return { usage, memoryUsed };
 }
 
 export function GpuMonitor({ showSparkline = true, compact = false }: GpuMonitorProps) {
     const [stats, setStats] = useState<GpuStats | null>(null);
     const [history, setHistory] = useState<number[]>([]);
-
+    const inFlightRef = useRef(false);
+    const staticInfoRef = useRef<Omit<GpuStats, 'usage' | 'memoryUsed'> | null>(null);
 
     // Fetch GPU stats periodically
     useEffect(() => {
         const fetchStats = async () => {
-            const gpuStats = await getGpuInfo();
-            setStats(gpuStats);
-            setHistory(prev => [...prev.slice(-30), gpuStats.usage]);
+            if (inFlightRef.current) {
+                return;
+            }
+            inFlightRef.current = true;
+            try {
+                if (!staticInfoRef.current) {
+                    staticInfoRef.current = await getStaticGpuInfo();
+                }
+
+                const dynamic = await getDynamicGpuStats(staticInfoRef.current.memoryTotal);
+                const gpuStats: GpuStats = {
+                    ...staticInfoRef.current,
+                    ...dynamic,
+                };
+                setStats(gpuStats);
+                setHistory(prev => [...prev.slice(-30), gpuStats.usage]);
+            } catch {
+                if (!staticInfoRef.current) {
+                    staticInfoRef.current = {
+                        gpuName: 'Unknown GPU',
+                        gpuCores: 0,
+                        memoryTotal: 16,
+                        isAppleSilicon: false,
+                    };
+                }
+                setStats(prev => ({
+                    ...staticInfoRef.current!,
+                    usage: prev?.usage ?? 0,
+                    memoryUsed: prev?.memoryUsed ?? 0,
+                }));
+            } finally {
+                inFlightRef.current = false;
+            }
         };
 
         fetchStats();
-        const interval = setInterval(fetchStats, 2000); // Update every 2 seconds
+        const interval = setInterval(fetchStats, 8000); // Update every 8 seconds
 
         return () => clearInterval(interval);
     }, []);

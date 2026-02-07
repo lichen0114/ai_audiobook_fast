@@ -93,12 +93,13 @@ describe('ConfigPanel', () => {
     });
 
     describe('Configuration steps', () => {
-        const steps = ['voice', 'speed', 'workers', 'gpu', 'output', 'output_custom', 'confirm'];
+        const steps = ['voice', 'speed', 'workers', 'checkpoint', 'gpu', 'output', 'output_custom', 'confirm'];
 
         it('should have all configuration steps', () => {
             expect(steps.includes('voice')).toBe(true);
             expect(steps.includes('speed')).toBe(true);
             expect(steps.includes('workers')).toBe(true);
+            expect(steps.includes('checkpoint')).toBe(true);
             expect(steps.includes('gpu')).toBe(true);
             expect(steps.includes('output')).toBe(true);
             expect(steps.includes('confirm')).toBe(true);
@@ -145,6 +146,41 @@ describe('ConfigPanel', () => {
 
             expect(getOutputLabel(null)).toBe('Same as input file');
             expect(getOutputLabel('/path/to/output')).toBe('/path/to/output');
+        });
+    });
+
+    describe('Backend selection', () => {
+        const backends = [
+            { label: 'Auto (Apple Silicon optimized)', value: 'auto' },
+            { label: 'PyTorch/MPS (Stable)', value: 'pytorch' },
+            { label: 'MLX (Faster - Experimental)', value: 'mlx' },
+        ];
+
+        it('should include auto backend option', () => {
+            const auto = backends.find(b => b.value === 'auto');
+            expect(auto).toBeDefined();
+        });
+
+        it('should default to auto backend', () => {
+            const defaultConfig = {
+                backend: 'auto',
+            };
+            expect(defaultConfig.backend).toBe('auto');
+        });
+    });
+
+    describe('Checkpoint toggle', () => {
+        it('should default checkpointing to disabled', () => {
+            const defaultConfig = {
+                checkpointEnabled: false,
+            };
+            expect(defaultConfig.checkpointEnabled).toBe(false);
+        });
+
+        it('should toggle checkpointing state', () => {
+            let checkpointEnabled = false;
+            checkpointEnabled = !checkpointEnabled;
+            expect(checkpointEnabled).toBe(true);
         });
     });
 

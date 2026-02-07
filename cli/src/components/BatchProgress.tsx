@@ -38,6 +38,13 @@ function parseErrorMessage(error: string): string {
     if (errorLower.includes('permission denied')) {
         return 'Permission denied - check file/folder permissions';
     }
+    if (
+        errorLower.includes('no space left on device') ||
+        errorLower.includes('disk full') ||
+        errorLower.includes('errno 28')
+    ) {
+        return 'Disk is full - free up space and try again';
+    }
     if (errorLower.includes('no readable text') || errorLower.includes('no text chunks')) {
         return 'EPUB has no readable text content';
     }

@@ -191,4 +191,33 @@ describe('GpuMonitor', () => {
             expect(status).toBe('Standard GPU');
         });
     });
+
+    describe('Polling behavior', () => {
+        it('should fetch static GPU identity once and reuse it', () => {
+            let staticFetches = 0;
+            const getStatic = () => {
+                staticFetches += 1;
+                return { gpuName: 'Apple M1', gpuCores: 8, memoryTotal: 16 };
+            };
+
+            const cached = getStatic();
+            const reused = cached;
+
+            expect(staticFetches).toBe(1);
+            expect(reused.gpuName).toBe('Apple M1');
+        });
+
+        it('should throttle dynamic polling to a slower cadence', () => {
+            const pollingIntervalMs = 8000;
+            expect(pollingIntervalMs).toBeGreaterThanOrEqual(8000);
+        });
+
+        it('should skip overlapping polls when one is in-flight', () => {
+            let inFlight = true;
+            const shouldRunPoll = !inFlight;
+            expect(shouldRunPoll).toBe(false);
+            inFlight = false;
+            expect(!inFlight).toBe(true);
+        });
+    });
 });

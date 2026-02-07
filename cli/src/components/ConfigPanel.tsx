@@ -8,7 +8,11 @@ import type { TTSConfig, FileJob } from '../App.js';
 // Optimal chunk sizes per backend based on benchmarks
 // MLX: 900 chars = 180 chars/s (+11% vs 1200)
 // PyTorch: 600 chars = 98 chars/s (+3% vs 1200)
-const BACKEND_CHUNK_CHARS: Record<'pytorch' | 'mlx', number> = {
+const AUTO_CHUNK_CHARS =
+    process.platform === 'darwin' && process.arch === 'arm64' ? 900 : 600;
+
+const BACKEND_CHUNK_CHARS: Record<'auto' | 'pytorch' | 'mlx', number> = {
+    auto: AUTO_CHUNK_CHARS,
     mlx: 900,
     pytorch: 600,
 };
@@ -54,6 +58,7 @@ const speeds = [
 ];
 
 const backends = [
+    { label: '🧠 Auto (Apple Silicon optimized)', value: 'auto' },
     { label: '🔥 PyTorch/MPS (Stable)', value: 'pytorch' },
     { label: '⚡ MLX (Faster - Experimental)', value: 'mlx' },
 ];
@@ -69,18 +74,19 @@ const bitrates = [
     { label: '🎼 320k (High quality)', value: '320k' },
 ];
 
-type ConfigStep = 'accent' | 'voice' | 'speed' | 'backend' | 'format' | 'quality' | 'workers' | 'gpu' | 'output' | 'output_custom' | 'confirm';
+type ConfigStep = 'accent' | 'voice' | 'speed' | 'backend' | 'format' | 'quality' | 'workers' | 'checkpoint' | 'gpu' | 'output' | 'output_custom' | 'confirm';
 
 export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelProps) {
     const [step, setStep] = useState<ConfigStep>('accent');
     const [selectedAccent, setSelectedAccent] = useState<'a' | 'b'>(config.langCode as 'a' | 'b' || 'a');
     const [selectedVoice, setSelectedVoice] = useState(config.voice);
     const [selectedSpeed, setSelectedSpeed] = useState(config.speed);
-    const [selectedBackend, setSelectedBackend] = useState<'pytorch' | 'mlx'>(config.backend || 'pytorch');
+    const [selectedBackend, setSelectedBackend] = useState<'auto' | 'pytorch' | 'mlx'>(config.backend || 'auto');
     const [selectedFormat, setSelectedFormat] = useState<'mp3' | 'm4b'>(config.outputFormat || 'mp3');
-    const [selectedChunkChars, setSelectedChunkChars] = useState(config.chunkChars || BACKEND_CHUNK_CHARS[config.backend || 'pytorch']);
+    const [selectedChunkChars, setSelectedChunkChars] = useState(config.chunkChars || BACKEND_CHUNK_CHARS[config.backend || 'auto']);
     const [selectedWorkers, setSelectedWorkers] = useState(config.workers || 2);
     const [useMPS, setUseMPS] = useState(config.useMPS);
+    const [checkpointEnabled, setCheckpointEnabled] = useState(config.checkpointEnabled || false);
     const [outputDir, setOutputDir] = useState<string | null>(config.outputDir);
     const [customPath, setCustomPath] = useState('');
     const [selectedBitrate, setSelectedBitrate] = useState<'128k' | '192k' | '320k'>(config.bitrate || '192k');
@@ -117,7 +123,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
     };
 
     const handleBackendSelect = (item: { value: string }) => {
-        const backend = item.value as 'pytorch' | 'mlx';
+        const backend = item.value as 'auto' | 'pytorch' | 'mlx';
         setSelectedBackend(backend);
         // Update chunk size to optimal value for selected backend
         setSelectedChunkChars(BACKEND_CHUNK_CHARS[backend]);
@@ -148,6 +154,12 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
 
     const handleWorkerSelect = (item: { value: string }) => {
         setSelectedWorkers(parseInt(item.value));
+        setStep('checkpoint');
+    };
+
+    const handleCheckpointSelect = (item: { value: string }) => {
+        const enabled = item.value === 'on';
+        setCheckpointEnabled(enabled);
         // Skip GPU step for MLX backend (it always uses Apple Silicon)
         if (selectedBackend === 'mlx') {
             setStep('output');
@@ -193,6 +205,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                 outputDir,
                 bitrate: selectedBitrate,
                 normalize,
+                checkpointEnabled,
             });
         } else if (item.value === 'accent') {
             setStep('accent');
@@ -208,6 +221,8 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
             setStep('quality');
         } else if (item.value === 'workers') {
             setStep('workers');
+        } else if (item.value === 'checkpoint') {
+            setStep('checkpoint');
         } else if (item.value === 'gpu') {
             setStep('gpu');
         } else if (item.value === 'output') {
@@ -280,6 +295,9 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                         🔨 Workers: <Text color={step === 'workers' ? 'yellow' : 'green'}>{selectedWorkers}</Text>
                     </Text>
                     <Text>
+                        💾 Checkpointing: <Text color={step === 'checkpoint' ? 'yellow' : checkpointEnabled ? 'green' : 'gray'}>{checkpointEnabled ? 'Enabled' : 'Disabled'}</Text>
+                    </Text>
+                    <Text>
                         🍎 GPU (Apple Silicon): <Text color={step === 'gpu' ? 'yellow' : useMPS ? 'green' : 'gray'}>{useMPS ? 'Enabled ⚡' : 'Disabled'}</Text>
                     </Text>
                     <Text>
@@ -332,7 +350,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
             {step === 'backend' && (
                 <Box flexDirection="column">
                     <Text color="yellow" bold>Select TTS backend:</Text>
-                    <Text dimColor>MLX is faster on Apple Silicon but requires mlx-audio to be installed</Text>
+                    <Text dimColor>Auto prefers MLX on Apple Silicon and falls back to PyTorch when needed</Text>
                     <Box marginTop={1}>
                         <SelectInput
                             items={backends}
@@ -393,6 +411,24 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                             ]}
                             onSelect={handleWorkerSelect}
                             initialIndex={[1, 2, 4].indexOf(selectedWorkers > 4 ? 4 : selectedWorkers || 2)}
+                        />
+                    </Box>
+                </Box>
+            )}
+
+            {/* Checkpoint Selection */}
+            {step === 'checkpoint' && (
+                <Box flexDirection="column">
+                    <Text color="yellow" bold>Checkpointing (resume support):</Text>
+                    <Text dimColor>Off by default for best throughput and lower disk I/O</Text>
+                    <Box marginTop={1}>
+                        <SelectInput
+                            items={[
+                                { label: '🚀 Disable checkpointing (default)', value: 'off' },
+                                { label: '💾 Enable checkpointing (resumable)', value: 'on' },
+                            ]}
+                            onSelect={handleCheckpointSelect}
+                            initialIndex={checkpointEnabled ? 1 : 0}
                         />
                     </Box>
                 </Box>
@@ -464,7 +500,8 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                                 { label: '💾 Change Format', value: 'format' },
                                 { label: '🎚️  Change Quality', value: 'quality' },
                                 { label: '🔨 Change Workers', value: 'workers' },
-                                ...(selectedBackend === 'pytorch' ? [{ label: '🍎 Toggle GPU Acceleration', value: 'gpu' }] : []),
+                                { label: '💾 Toggle Checkpointing', value: 'checkpoint' },
+                                ...(selectedBackend !== 'mlx' ? [{ label: '🍎 Toggle GPU Acceleration', value: 'gpu' }] : []),
                                 { label: '📁 Change Output Directory', value: 'output' },
                             ]}
                             onSelect={handleConfirm}
@@ -479,4 +516,3 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
         </Box>
     );
 }
-

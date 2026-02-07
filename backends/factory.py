@@ -1,5 +1,6 @@
 """Factory function for creating TTS backends."""
 
+import importlib.util
 from typing import List
 
 from .base import TTSBackend
@@ -41,13 +42,8 @@ def get_available_backends() -> List[str]:
     """
     backends = ["pytorch"]  # PyTorch is always available if kokoro is installed
 
-    # Check if MLX is available
-    try:
-        from .kokoro_mlx import is_mlx_available
-
-        if is_mlx_available():
-            backends.append("mlx")
-    except ImportError:
-        pass
+    # Check if MLX backend package is installed without importing MLX runtime.
+    if importlib.util.find_spec("mlx_audio") is not None:
+        backends.append("mlx")
 
     return backends

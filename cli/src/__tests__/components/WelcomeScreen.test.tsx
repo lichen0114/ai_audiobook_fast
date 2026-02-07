@@ -111,7 +111,7 @@ describe('WelcomeScreen', () => {
             const onStart = () => { started = true; };
 
             // Simulate other key
-            const input = 'a';
+            const input: string = 'a';
             const key = { return: false };
             if (key.return || input === ' ') {
                 onStart();

@@ -5,6 +5,7 @@ import type { ChildProcess } from 'child_process';
 // Mock the modules before importing
 vi.mock('child_process', () => ({
     spawn: vi.fn(),
+    spawnSync: vi.fn(),
 }));
 
 // We need to test the parsing logic from tts-runner.ts
@@ -54,6 +55,13 @@ describe('tts-runner', () => {
                 const line = 'METADATA:total_chars:1234567890';
                 const totalChars = parseInt(line.slice(21), 10);
                 expect(totalChars).toBe(1234567890);
+            });
+
+            it('should parse METADATA:backend_resolved message', () => {
+                const line = 'METADATA:backend_resolved:mlx';
+                expect(line.startsWith('METADATA:backend_resolved:')).toBe(true);
+                const backend = line.slice(26);
+                expect(backend).toBe('mlx');
             });
         });
 
@@ -168,11 +176,27 @@ describe('tts-runner', () => {
             expect(mpsEnv.OMP_NUM_THREADS).toBe('4');
             expect(mpsEnv.OPENBLAS_NUM_THREADS).toBe('2');
         });
+
+        it('should compose auto backend + checkpoint args', () => {
+            const config = {
+                backend: 'auto',
+                checkpointEnabled: true,
+            };
+
+            const args = [
+                '--backend', config.backend,
+                ...(config.checkpointEnabled ? ['--checkpoint'] : []),
+            ];
+
+            expect(args).toContain('--backend');
+            expect(args).toContain('auto');
+            expect(args).toContain('--checkpoint');
+        });
     });
 
     describe('Error Handling', () => {
         it('should detect Python process exit with error code', () => {
-            const code = 1;
+            const code: number = 1;
             const stderr = 'Error: something went wrong';
 
             if (code !== 0) {
@@ -220,6 +244,7 @@ PROGRESS:1/10 chunks`;
                 'PHASE:PARSING',
                 'Loading model...',
                 'METADATA:total_chars:5000',
+                'METADATA:backend_resolved:mlx',
                 'Some debug output',
             ];
 
@@ -232,7 +257,7 @@ PROGRESS:1/10 chunks`;
                 line.startsWith('PROGRESS:')
             );
 
-            expect(ipcMessages.length).toBe(2);
+            expect(ipcMessages.length).toBe(3);
         });
     });
 });

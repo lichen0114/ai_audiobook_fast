@@ -36,6 +36,8 @@ class TestParseArgs:
             assert args.split_pattern == r"\n+"
             assert args.workers == 2
             assert args.no_rich is False
+            assert args.backend == "auto"
+            assert args.checkpoint is False
 
     def test_custom_voice(self):
         """Should accept custom voice."""
@@ -72,6 +74,24 @@ class TestParseArgs:
         ]):
             args = parse_args()
             assert args.workers == 4
+
+    def test_backend_auto(self):
+        """Should accept auto backend selection."""
+        with patch("sys.argv", [
+            "app.py", "--input", "test.epub", "--output", "test.mp3",
+            "--backend", "auto"
+        ]):
+            args = parse_args()
+            assert args.backend == "auto"
+
+    def test_checkpoint_flag(self):
+        """Should accept --checkpoint flag."""
+        with patch("sys.argv", [
+            "app.py", "--input", "test.epub", "--output", "test.mp3",
+            "--checkpoint"
+        ]):
+            args = parse_args()
+            assert args.checkpoint is True
 
     def test_no_rich_flag(self):
         """Should accept --no_rich flag."""
@@ -130,6 +150,8 @@ class TestParseArgs:
             "--chunk_chars", "1500",
             "--split_pattern", r"\n+",
             "--workers", "3",
+            "--backend", "auto",
+            "--checkpoint",
             "--no_rich",
         ]):
             args = parse_args()
@@ -142,4 +164,6 @@ class TestParseArgs:
             assert args.chunk_chars == 1500
             assert args.split_pattern == r"\n+"
             assert args.workers == 3
+            assert args.backend == "auto"
+            assert args.checkpoint is True
             assert args.no_rich is True

@@ -26,10 +26,11 @@ export interface TTSConfig {
     useMPS: boolean;
     outputDir: string | null; // null means same directory as input
     workers: number; // Number of parallel workers for audio encoding
-    backend: 'pytorch' | 'mlx'; // TTS backend to use
+    backend: 'auto' | 'pytorch' | 'mlx'; // TTS backend to use
     outputFormat: 'mp3' | 'm4b'; // Output format
     bitrate: '128k' | '192k' | '320k'; // Audio bitrate
     normalize: boolean; // Apply loudness normalization
+    checkpointEnabled: boolean; // Enable checkpoint writes for resume support
     // Metadata overrides for M4B
     metadataTitle?: string;
     metadataAuthor?: string;
@@ -58,7 +59,11 @@ export interface FileJob {
 // Optimal chunk sizes per backend based on benchmarks
 // MLX: 900 chars = 180 chars/s (+11% vs 1200)
 // PyTorch: 600 chars = 98 chars/s (+3% vs 1200)
-const BACKEND_CHUNK_CHARS: Record<'pytorch' | 'mlx', number> = {
+const AUTO_CHUNK_CHARS =
+    process.platform === 'darwin' && process.arch === 'arm64' ? 900 : 600;
+
+const BACKEND_CHUNK_CHARS: Record<'auto' | 'pytorch' | 'mlx', number> = {
+    auto: AUTO_CHUNK_CHARS,
     mlx: 900,
     pytorch: 600,
 };
@@ -67,14 +72,15 @@ const defaultConfig: TTSConfig = {
     voice: 'af_heart',
     speed: 1.0,
     langCode: 'a',
-    chunkChars: 600, // Default for PyTorch; updated when backend changes
+    chunkChars: BACKEND_CHUNK_CHARS.auto,
     useMPS: true, // Enable Apple Silicon GPU acceleration by default
     outputDir: null,
     workers: 2, // Use 2 parallel workers by default (optimal for Apple Silicon MPS)
-    backend: 'pytorch', // Default to PyTorch backend
+    backend: 'auto', // Default to auto backend selection
     outputFormat: 'mp3', // Default to MP3 format
     bitrate: '192k', // Default to 192k bitrate
     normalize: false, // Loudness normalization off by default
+    checkpointEnabled: false, // Default off for stability/perf
 };
 
 function formatBytes(bytes: number): string {
@@ -247,7 +253,7 @@ export function App() {
     const handleResumeChoice = async (resume: boolean) => {
         if (resume) {
             setShouldResume(true);
-            setConfig(prev => ({ ...prev, resume: true }));
+            setConfig(prev => ({ ...prev, resume: true, checkpointEnabled: true }));
         } else {
             // User chose to start fresh - delete checkpoint
             setShouldResume(false);

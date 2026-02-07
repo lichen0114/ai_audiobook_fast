@@ -3,6 +3,7 @@ import { vi } from 'vitest';
 // Mock child_process module
 vi.mock('child_process', () => ({
     spawn: vi.fn(),
+    spawnSync: vi.fn(),
     exec: vi.fn(),
 }));
 
