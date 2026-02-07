@@ -9,6 +9,7 @@ export interface WorkerStatus {
 }
 
 export type ProcessingPhase = 'PARSING' | 'INFERENCE' | 'CONCATENATING' | 'EXPORTING' | 'DONE';
+export type ResolvedBackend = 'pytorch' | 'mlx' | 'mock';
 
 export interface ProgressInfo {
     progress: number;
@@ -20,11 +21,203 @@ export interface ProgressInfo {
     heartbeatTs?: number;    // Heartbeat timestamp
     totalChars?: number;     // Total characters in EPUB
     chapterCount?: number;   // Number of chapters in EPUB
-    backendResolved?: 'pytorch' | 'mlx';
+    backendResolved?: ResolvedBackend;
 }
 
-function resolveBackendForEnv(config: TTSConfig, projectRoot: string, venvPython: string): 'pytorch' | 'mlx' {
-    if (config.backend === 'pytorch' || config.backend === 'mlx') {
+export interface ParserState {
+    lastProgress: number;
+    lastCurrentChunk: number;
+    lastTotal: number;
+    lastPhase?: ProcessingPhase;
+    lastTotalChars?: number;
+    lastChapterCount?: number;
+    lastBackendResolved?: ResolvedBackend;
+}
+
+const PROCESSING_PHASES: ProcessingPhase[] = [
+    'PARSING',
+    'INFERENCE',
+    'CONCATENATING',
+    'EXPORTING',
+    'DONE',
+];
+
+function isProcessingPhase(value: string): value is ProcessingPhase {
+    return PROCESSING_PHASES.includes(value as ProcessingPhase);
+}
+
+export function createParserState(): ParserState {
+    return {
+        lastProgress: 0,
+        lastCurrentChunk: 0,
+        lastTotal: 0,
+    };
+}
+
+export function parseOutputLine(line: string, state: ParserState): ProgressInfo | null {
+    const trimmed = line.trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    if (trimmed.startsWith('PHASE:')) {
+        const phase = trimmed.slice(6);
+        if (!isProcessingPhase(phase)) {
+            return null;
+        }
+        state.lastPhase = phase;
+        return {
+            progress: state.lastProgress,
+            currentChunk: state.lastCurrentChunk,
+            totalChunks: state.lastTotal,
+            phase,
+            totalChars: state.lastTotalChars,
+            chapterCount: state.lastChapterCount,
+            backendResolved: state.lastBackendResolved,
+        };
+    }
+
+    if (trimmed.startsWith('METADATA:backend_resolved:')) {
+        const backendResolved = trimmed.slice(26);
+        if (backendResolved === 'pytorch' || backendResolved === 'mlx' || backendResolved === 'mock') {
+            state.lastBackendResolved = backendResolved;
+            return {
+                progress: state.lastProgress,
+                currentChunk: state.lastCurrentChunk,
+                totalChunks: state.lastTotal,
+                phase: state.lastPhase,
+                totalChars: state.lastTotalChars,
+                chapterCount: state.lastChapterCount,
+                backendResolved,
+            };
+        }
+        return null;
+    }
+
+    if (trimmed.startsWith('METADATA:total_chars:')) {
+        const totalChars = parseInt(trimmed.slice(21), 10);
+        if (Number.isNaN(totalChars)) {
+            return null;
+        }
+        state.lastTotalChars = totalChars;
+        return {
+            progress: state.lastProgress,
+            currentChunk: state.lastCurrentChunk,
+            totalChunks: state.lastTotal,
+            phase: state.lastPhase,
+            totalChars,
+            chapterCount: state.lastChapterCount,
+            backendResolved: state.lastBackendResolved,
+        };
+    }
+
+    if (trimmed.startsWith('METADATA:chapter_count:')) {
+        const chapterCount = parseInt(trimmed.slice(23), 10);
+        if (Number.isNaN(chapterCount)) {
+            return null;
+        }
+        state.lastChapterCount = chapterCount;
+        return {
+            progress: state.lastProgress,
+            currentChunk: state.lastCurrentChunk,
+            totalChunks: state.lastTotal,
+            phase: state.lastPhase,
+            totalChars: state.lastTotalChars,
+            chapterCount,
+            backendResolved: state.lastBackendResolved,
+        };
+    }
+
+    if (trimmed.startsWith('TIMING:')) {
+        const parts = trimmed.slice(7).split(':');
+        if (parts.length >= 2) {
+            const chunkTimingMs = parseInt(parts[1], 10);
+            if (!Number.isNaN(chunkTimingMs)) {
+                return {
+                    progress: state.lastProgress,
+                    currentChunk: state.lastCurrentChunk,
+                    totalChunks: state.lastTotal,
+                    phase: state.lastPhase,
+                    chunkTimingMs,
+                    totalChars: state.lastTotalChars,
+                    chapterCount: state.lastChapterCount,
+                    backendResolved: state.lastBackendResolved,
+                };
+            }
+        }
+        return null;
+    }
+
+    if (trimmed.startsWith('HEARTBEAT:')) {
+        const heartbeatTs = parseInt(trimmed.slice(10), 10);
+        if (Number.isNaN(heartbeatTs)) {
+            return null;
+        }
+        return {
+            progress: state.lastProgress,
+            currentChunk: state.lastCurrentChunk,
+            totalChunks: state.lastTotal,
+            phase: state.lastPhase,
+            heartbeatTs,
+            totalChars: state.lastTotalChars,
+            chapterCount: state.lastChapterCount,
+            backendResolved: state.lastBackendResolved,
+        };
+    }
+
+    if (trimmed.startsWith('WORKER:')) {
+        const parts = trimmed.split(':');
+        if (parts.length >= 4) {
+            const id = parseInt(parts[1], 10);
+            const status = parts[2];
+            if (
+                !Number.isNaN(id)
+                && (status === 'IDLE' || status === 'INFER' || status === 'ENCODE')
+            ) {
+                return {
+                    progress: state.lastProgress,
+                    currentChunk: state.lastCurrentChunk,
+                    totalChunks: state.lastTotal,
+                    phase: state.lastPhase,
+                    workerStatus: { id, status, details: parts.slice(3).join(':') },
+                    totalChars: state.lastTotalChars,
+                    chapterCount: state.lastChapterCount,
+                    backendResolved: state.lastBackendResolved,
+                };
+            }
+        }
+        return null;
+    }
+
+    const chunkMatch = trimmed.match(/(?:PROGRESS:)?(\d+)\/(\d+)\s*chunks/);
+    if (chunkMatch) {
+        const current = parseInt(chunkMatch[1], 10);
+        const total = parseInt(chunkMatch[2], 10);
+        if (total <= 0 || Number.isNaN(current) || Number.isNaN(total)) {
+            return null;
+        }
+        const progress = Math.round((current / total) * 100);
+
+        state.lastProgress = progress;
+        state.lastCurrentChunk = current;
+        state.lastTotal = total;
+
+        return {
+            progress,
+            currentChunk: current,
+            totalChunks: total,
+            phase: state.lastPhase,
+            totalChars: state.lastTotalChars,
+            chapterCount: state.lastChapterCount,
+            backendResolved: state.lastBackendResolved,
+        };
+    }
+
+    return null;
+}
+
+function resolveBackendForEnv(config: TTSConfig, projectRoot: string, venvPython: string): ResolvedBackend {
+    if (config.backend === 'pytorch' || config.backend === 'mlx' || config.backend === 'mock') {
         return config.backend;
     }
 
@@ -60,11 +253,8 @@ export function runTTS(
     onProgress: (info: ProgressInfo) => void
 ): Promise<void> {
     return new Promise((resolve, reject) => {
-        // Get the project root (parent of cli directory)
         const projectRoot = path.resolve(import.meta.dirname, '../../..');
         const pythonScript = path.join(projectRoot, 'app.py');
-
-        // Check if we're in a virtual environment
         const venvPython = path.join(projectRoot, '.venv', 'bin', 'python');
         const backendForEnv = resolveBackendForEnv(config, projectRoot, venvPython);
 
@@ -87,16 +277,13 @@ export function runTTS(
             ...(config.checkpointEnabled ? ['--checkpoint'] : []),
             ...(config.resume ? ['--resume'] : []),
             ...(config.noCheckpoint ? ['--no_checkpoint'] : []),
-            '--no_rich', // Disable rich progress bar to prevent CLI flashing
+            '--no_rich',
         ];
 
-        // Only set PyTorch MPS env vars for the pytorch backend
         const isPyTorchBackend = backendForEnv === 'pytorch';
         const mpsEnvVars = isPyTorchBackend && config.useMPS ? {
             PYTORCH_ENABLE_MPS_FALLBACK: '1',
-            // MPS memory optimization - aggressive cleanup for 8GB Macs
             PYTORCH_MPS_HIGH_WATERMARK_RATIO: '0.0',
-            // Limit thread parallelism to reduce GIL contention
             OMP_NUM_THREADS: '4',
             OPENBLAS_NUM_THREADS: '2',
         } : {};
@@ -110,180 +297,40 @@ export function runTTS(
             },
         });
 
-        let lastProgress = 0;
-        let lastCurrentChunk = 0;
-        let lastTotal = 0;
-        let lastPhase: ProcessingPhase | undefined;
-        let lastTotalChars: number | undefined;
-        let lastChapterCount: number | undefined;
-        let lastBackendResolved: 'pytorch' | 'mlx' | undefined;
-        let stderr = '';
+        const parserState = createParserState();
+        let stdoutBuffer = '';
+        let stderrBuffer = '';
+        let stderrTail = '';
         const MAX_STDERR = 10000;
 
+        const emitParsedLine = (line: string) => {
+            const update = parseOutputLine(line, parserState);
+            if (update) {
+                onProgress(update);
+            }
+        };
+
         process.stdout.on('data', (data: Buffer) => {
-            const output = data.toString();
-            // console.log("Has stdout", output)
-
-            const lines = output.split('\n');
+            stdoutBuffer += data.toString();
+            const lines = stdoutBuffer.split('\n');
+            stdoutBuffer = lines.pop() || '';
             for (const line of lines) {
-                // Parse phase transitions
-                // PHASE:PARSING, PHASE:INFERENCE, PHASE:CONCATENATING, PHASE:EXPORTING
-                if (line.startsWith('PHASE:')) {
-                    const phase = line.slice(6) as ProcessingPhase;
-                    lastPhase = phase;
-                    onProgress({
-                        progress: lastProgress,
-                        currentChunk: lastCurrentChunk,
-                        totalChunks: lastTotal,
-                        phase,
-                        totalChars: lastTotalChars,
-                    });
-                }
-
-                // Parse metadata
-                // METADATA:backend_resolved:mlx
-                if (line.startsWith('METADATA:backend_resolved:')) {
-                    const backendResolved = line.slice(26);
-                    if (backendResolved === 'pytorch' || backendResolved === 'mlx') {
-                        lastBackendResolved = backendResolved;
-                        onProgress({
-                            progress: lastProgress,
-                            currentChunk: lastCurrentChunk,
-                            totalChunks: lastTotal,
-                            phase: lastPhase,
-                            totalChars: lastTotalChars,
-                            chapterCount: lastChapterCount,
-                            backendResolved,
-                        });
-                    }
-                }
-
-                // METADATA:total_chars:12345
-                if (line.startsWith('METADATA:total_chars:')) {
-                    const totalChars = parseInt(line.slice(21), 10);
-                    lastTotalChars = totalChars;
-                    onProgress({
-                        progress: lastProgress,
-                        currentChunk: lastCurrentChunk,
-                        totalChunks: lastTotal,
-                        phase: lastPhase,
-                        totalChars,
-                        chapterCount: lastChapterCount,
-                        backendResolved: lastBackendResolved,
-                    });
-                }
-
-                // METADATA:chapter_count:10
-                if (line.startsWith('METADATA:chapter_count:')) {
-                    const chapterCount = parseInt(line.slice(23), 10);
-                    lastChapterCount = chapterCount;
-                    onProgress({
-                        progress: lastProgress,
-                        currentChunk: lastCurrentChunk,
-                        totalChunks: lastTotal,
-                        phase: lastPhase,
-                        totalChars: lastTotalChars,
-                        chapterCount,
-                        backendResolved: lastBackendResolved,
-                    });
-                }
-
-                // Parse per-chunk timing
-                // TIMING:5:2340 (chunk_idx:ms)
-                if (line.startsWith('TIMING:')) {
-                    const parts = line.slice(7).split(':');
-                    if (parts.length >= 2) {
-                        const chunkTimingMs = parseInt(parts[1], 10);
-                        onProgress({
-                            progress: lastProgress,
-                            currentChunk: lastCurrentChunk,
-                            totalChunks: lastTotal,
-                            phase: lastPhase,
-                            chunkTimingMs,
-                            totalChars: lastTotalChars,
-                            backendResolved: lastBackendResolved,
-                        });
-                    }
-                }
-
-                // Parse heartbeat
-                // HEARTBEAT:1234567890123
-                if (line.startsWith('HEARTBEAT:')) {
-                    const heartbeatTs = parseInt(line.slice(10), 10);
-                    onProgress({
-                        progress: lastProgress,
-                        currentChunk: lastCurrentChunk,
-                        totalChunks: lastTotal,
-                        phase: lastPhase,
-                        heartbeatTs,
-                        totalChars: lastTotalChars,
-                        backendResolved: lastBackendResolved,
-                    });
-                }
-
-                // Parse worker status
-                // WORKER:0:INFER:Chunk 5/50
-                if (line.startsWith('WORKER:')) {
-                    const parts = line.split(':');
-                    if (parts.length >= 4) {
-                        const id = parseInt(parts[1], 10);
-                        const status = parts[2] as 'IDLE' | 'INFER' | 'ENCODE';
-                        const details = parts.slice(3).join(':'); // Rejoin rest in case details contain colons
-
-                        onProgress({
-                            progress: lastProgress,
-                            currentChunk: lastCurrentChunk,
-                            totalChunks: lastTotal,
-                            phase: lastPhase,
-                            workerStatus: { id, status, details },
-                            totalChars: lastTotalChars,
-                            backendResolved: lastBackendResolved,
-                        });
-                    }
-                }
-
-                // Parse progress from explicit PROGRESS output or rich progress bar
-                // Looking for patterns like "PROGRESS:42/100 chunks" or "42/100 chunks"
-                const chunkMatch = line.match(/(?:PROGRESS:)?(\d+)\/(\d+)\s*chunks/);
-                if (chunkMatch) {
-                    const current = parseInt(chunkMatch[1], 10);
-                    const total = parseInt(chunkMatch[2], 10);
-                    const progress = Math.round((current / total) * 100);
-                    // Always update on progress match
-                    lastProgress = progress;
-                    lastCurrentChunk = current;
-                    lastTotal = total;
-                    onProgress({
-                        progress,
-                        currentChunk: current,
-                        totalChunks: total,
-                        phase: lastPhase,
-                        totalChars: lastTotalChars,
-                        backendResolved: lastBackendResolved,
-                    });
-                }
+                emitParsedLine(line);
             }
         });
 
         process.stderr.on('data', (data: Buffer) => {
-            stderr += data.toString();
-            // Bound stderr buffer to prevent memory leak on long runs
-            if (stderr.length > MAX_STDERR) {
-                stderr = stderr.slice(-MAX_STDERR);
+            const chunk = data.toString();
+            stderrTail += chunk;
+            if (stderrTail.length > MAX_STDERR) {
+                stderrTail = stderrTail.slice(-MAX_STDERR);
             }
 
-            // Also check stderr for progress (rich sometimes writes there)
-            const chunkMatch = stderr.match(/(\d+)\/(\d+)\s*chunks/);
-            if (chunkMatch) {
-                const current = parseInt(chunkMatch[1], 10);
-                const total = parseInt(chunkMatch[2], 10);
-                const progress = Math.round((current / total) * 100);
-                if (progress > lastProgress || total !== lastTotal) {
-                    lastProgress = progress;
-                    lastCurrentChunk = current;
-                    lastTotal = total;
-                    onProgress({ progress, currentChunk: current, totalChunks: total });
-                }
+            stderrBuffer += chunk;
+            const lines = stderrBuffer.split('\n');
+            stderrBuffer = lines.pop() || '';
+            for (const line of lines) {
+                emitParsedLine(line);
             }
         });
 
@@ -292,11 +339,26 @@ export function runTTS(
         });
 
         process.on('close', (code) => {
+            if (stdoutBuffer.trim()) {
+                emitParsedLine(stdoutBuffer.trim());
+            }
+            if (stderrBuffer.trim()) {
+                emitParsedLine(stderrBuffer.trim());
+            }
+
             if (code === 0) {
-                onProgress({ progress: 100, currentChunk: lastTotal, totalChunks: lastTotal });
+                onProgress({
+                    progress: 100,
+                    currentChunk: parserState.lastTotal,
+                    totalChunks: parserState.lastTotal,
+                    phase: 'DONE',
+                    totalChars: parserState.lastTotalChars,
+                    chapterCount: parserState.lastChapterCount,
+                    backendResolved: parserState.lastBackendResolved,
+                });
                 resolve();
             } else {
-                reject(new Error(`Python process exited with code ${code}\n${stderr}`));
+                reject(new Error(`Python process exited with code ${code}\n${stderrTail}`));
             }
         });
     });

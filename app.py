@@ -639,7 +639,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--backend",
-        choices=["auto", "pytorch", "mlx"],
+        choices=["auto", "pytorch", "mlx", "mock"],
         default="auto",
         help="TTS backend to use (default: auto)",
     )

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from backends import create_backend, TTSBackend
 from backends.kokoro_pytorch import KokoroPyTorchBackend
+from backends.mock import MockTTSBackend
 
 
 @pytest.mark.unit
@@ -192,3 +193,9 @@ class TestBackendFactory:
         backend = create_backend("pytorch")
         assert backend.name == "pytorch"
         assert backend.sample_rate == 24000
+
+    def test_create_mock_backend(self):
+        """Factory should create mock backend for tests."""
+        backend = create_backend("mock")
+        assert backend.name == "mock"
+        assert isinstance(backend, MockTTSBackend)

@@ -11,10 +11,11 @@ import type { TTSConfig, FileJob } from '../App.js';
 const AUTO_CHUNK_CHARS =
     process.platform === 'darwin' && process.arch === 'arm64' ? 900 : 600;
 
-const BACKEND_CHUNK_CHARS: Record<'auto' | 'pytorch' | 'mlx', number> = {
+const BACKEND_CHUNK_CHARS: Record<'auto' | 'pytorch' | 'mlx' | 'mock', number> = {
     auto: AUTO_CHUNK_CHARS,
     mlx: 900,
     pytorch: 600,
+    mock: 600,
 };
 
 interface ConfigPanelProps {
@@ -81,7 +82,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
     const [selectedAccent, setSelectedAccent] = useState<'a' | 'b'>(config.langCode as 'a' | 'b' || 'a');
     const [selectedVoice, setSelectedVoice] = useState(config.voice);
     const [selectedSpeed, setSelectedSpeed] = useState(config.speed);
-    const [selectedBackend, setSelectedBackend] = useState<'auto' | 'pytorch' | 'mlx'>(config.backend || 'auto');
+    const [selectedBackend, setSelectedBackend] = useState<'auto' | 'pytorch' | 'mlx' | 'mock'>(config.backend || 'auto');
     const [selectedFormat, setSelectedFormat] = useState<'mp3' | 'm4b'>(config.outputFormat || 'mp3');
     const [selectedChunkChars, setSelectedChunkChars] = useState(config.chunkChars || BACKEND_CHUNK_CHARS[config.backend || 'auto']);
     const [selectedWorkers, setSelectedWorkers] = useState(config.workers || 2);
@@ -123,7 +124,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
     };
 
     const handleBackendSelect = (item: { value: string }) => {
-        const backend = item.value as 'auto' | 'pytorch' | 'mlx';
+        const backend = item.value as 'auto' | 'pytorch' | 'mlx' | 'mock';
         setSelectedBackend(backend);
         // Update chunk size to optimal value for selected backend
         setSelectedChunkChars(BACKEND_CHUNK_CHARS[backend]);

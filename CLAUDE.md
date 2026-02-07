@@ -32,12 +32,9 @@ npm run build                   # Compile TypeScript
 ### Testing
 ```bash
 # Python (from repo root)
-pytest                          # All tests with coverage
-pytest tests/unit               # Unit tests only
-pytest tests/integration        # Integration tests only
-pytest -k test_clean_text       # Single test by name
-pytest -m slow                  # Only slow tests
-pytest -m "not slow"            # Skip slow tests
+.venv/bin/python -m pytest -m "not slow" --cov=app --cov-fail-under=75
+.venv/bin/python -m pytest tests/e2e
+.venv/bin/python -m pytest -m slow
 
 # CLI (from cli/)
 npm test                        # All tests
@@ -49,6 +46,7 @@ npm run test:coverage           # With coverage
 ```bash
 python app.py --input book.epub --output book.mp3 --voice af_heart --speed 1.0
 python app.py --backend mlx --input book.epub --output book.mp3  # MLX backend (faster)
+python app.py --backend mock --input book.epub --output book.mp3 # Deterministic test backend
 python app.py --format m4b --input book.epub --output book.m4b   # M4B with chapters
 python app.py --bitrate 320k --normalize --input book.epub --output book.mp3  # High quality + normalization
 python app.py --resume --input book.epub --output book.mp3       # Resume from checkpoint
@@ -61,9 +59,10 @@ TTS backends are pluggable via an abstraction layer:
 - `base.py` - `TTSBackend` abstract base class defining the interface (`initialize`, `generate`, `cleanup`)
 - `kokoro_pytorch.py` - Default PyTorch/Kokoro implementation (uses MPS on Apple Silicon)
 - `kokoro_mlx.py` - MLX implementation for faster inference on Apple Silicon
+- `mock.py` - Deterministic backend for subprocess E2E tests
 - `factory.py` - `create_backend(type)` factory function, `get_available_backends()` for discovery
 
-The `--backend` flag selects which backend to use (`pytorch` or `mlx`). MLX requires separate installation (`pip install -r requirements-mlx.txt`).
+The `--backend` flag selects which backend to use (`auto`, `pytorch`, `mlx`, or `mock`). MLX requires separate installation (`pip install -r requirements-mlx.txt`).
 
 ### Checkpoint System (`checkpoint.py`)
 Enables resumable processing for long audiobooks:

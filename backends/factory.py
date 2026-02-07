@@ -10,7 +10,7 @@ def create_backend(backend_type: str) -> TTSBackend:
     """Create a TTS backend instance.
 
     Args:
-        backend_type: The type of backend to create ('pytorch' or 'mlx')
+        backend_type: The type of backend to create ('pytorch', 'mlx', or 'mock')
 
     Returns:
         An instance of TTSBackend
@@ -27,6 +27,10 @@ def create_backend(backend_type: str) -> TTSBackend:
         from .kokoro_mlx import KokoroMLXBackend
 
         return KokoroMLXBackend()
+    elif backend_type == "mock":
+        from .mock import MockTTSBackend
+
+        return MockTTSBackend()
     else:
         raise ValueError(
             f"Unknown backend type: {backend_type}. "
@@ -40,7 +44,7 @@ def get_available_backends() -> List[str]:
     Returns:
         List of backend type strings that can be used with create_backend()
     """
-    backends = ["pytorch"]  # PyTorch is always available if kokoro is installed
+    backends = ["pytorch", "mock"]  # mock backend is always available for tests
 
     # Check if MLX backend package is installed without importing MLX runtime.
     if importlib.util.find_spec("mlx_audio") is not None:

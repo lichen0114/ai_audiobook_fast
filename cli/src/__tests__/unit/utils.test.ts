@@ -1,28 +1,5 @@
 import { describe, it, expect } from 'vitest';
-
-// Extract utility functions from App.tsx for testing
-// These are the formatBytes and formatDuration functions
-
-function formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-}
-
-function formatDuration(ms: number): string {
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-
-    if (hours > 0) {
-        return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
-    } else if (minutes > 0) {
-        return `${minutes}m ${seconds % 60}s`;
-    }
-    return `${seconds}s`;
-}
+import { formatBytes, formatDuration } from '../../utils/format.js';
 
 describe('Utility Functions', () => {
     describe('formatBytes', () => {
@@ -85,13 +62,8 @@ describe('Utility Functions', () => {
         });
 
         it('should handle edge cases', () => {
-            // Just under 1 minute
             expect(formatDuration(59999)).toBe('59s');
-
-            // Just under 1 hour
             expect(formatDuration(3599999)).toBe('59m 59s');
-
-            // Large values
             expect(formatDuration(36000000)).toBe('10h 0m 0s');
         });
     });
@@ -136,15 +108,8 @@ describe('Utility Functions', () => {
                 return `${Math.round(remainingTime / 1000)} sec`;
             };
 
-            // 30 seconds elapsed, 10 of 100 done
-            // Avg = 3s/chunk, 90 remaining = 270s = 4.5 min
             expect(calculateEta(30000, 10, 100)).toBe('5 min');
-
-            // 10 seconds elapsed, 50 of 100 done
-            // Avg = 0.2s/chunk, 50 remaining = 10s
             expect(calculateEta(10000, 50, 100)).toBe('10 sec');
-
-            // No progress yet
             expect(calculateEta(5000, 0, 100)).toBe('Calculating...');
         });
     });
@@ -163,13 +128,8 @@ describe('Utility Functions', () => {
                 return ema;
             };
 
-            // First value becomes EMA
             expect(updateEma(1000)).toBe(1000);
-
-            // Second value smoothed: 0.3 * 2000 + 0.7 * 1000 = 1300
             expect(updateEma(2000)).toBe(1300);
-
-            // Third value smoothed: 0.3 * 1500 + 0.7 * 1300 = 1360
             expect(updateEma(1500)).toBe(1360);
         });
     });

@@ -314,6 +314,36 @@ python app.py --input book.epub --output book.mp3
 
 ---
 
+## 🧪 Testing
+
+### Fast local checks
+
+```bash
+# Python (skips slow marker)
+.venv/bin/python -m pytest -m "not slow" --cov=app --cov-fail-under=75
+
+# CLI
+npm test --prefix cli
+npm run test:coverage --prefix cli
+```
+
+### Full subprocess E2E checks
+
+```bash
+# Python subprocess E2E (uses --backend mock internally)
+.venv/bin/python -m pytest tests/e2e
+
+# Slow real ffmpeg validation
+.venv/bin/python -m pytest -m slow
+```
+
+### CI quality gates
+- Python coverage gate: `app.py` must stay at or above **75%**
+- CLI coverage gates (Vitest): **60%** statements/functions/lines and **50%** branches
+- Scheduled/manual CI also runs `pytest -m slow` for real ffmpeg/M4B validation
+
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome! Feel free to:

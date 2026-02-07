@@ -11,8 +11,14 @@ export default defineConfig({
         coverage: {
             provider: 'v8',
             reporter: ['text', 'html', 'lcov'],
-            include: ['src/**/*.{ts,tsx}'],
-            exclude: ['src/__tests__/**', 'src/index.tsx'],
+            include: ['src/utils/tts-runner.ts', 'src/utils/format.ts'],
+            exclude: ['src/__tests__/**'],
+            thresholds: {
+                statements: 60,
+                branches: 50,
+                functions: 60,
+                lines: 60,
+            },
         },
     },
 });

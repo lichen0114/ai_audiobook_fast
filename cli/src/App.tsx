@@ -12,6 +12,7 @@ import { KeyboardHint, DONE_HINTS, PROCESSING_HINTS } from './components/Keyboar
 import { runPreflightChecks, quickCheck, type PreflightCheck } from './utils/preflight.js';
 import { extractMetadata } from './utils/metadata.js';
 import { checkCheckpoint, deleteCheckpoint } from './utils/checkpoint.js';
+import { formatBytes, formatDuration } from './utils/format.js';
 import { exec } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -26,7 +27,7 @@ export interface TTSConfig {
     useMPS: boolean;
     outputDir: string | null; // null means same directory as input
     workers: number; // Number of parallel workers for audio encoding
-    backend: 'auto' | 'pytorch' | 'mlx'; // TTS backend to use
+    backend: 'auto' | 'pytorch' | 'mlx' | 'mock'; // TTS backend to use
     outputFormat: 'mp3' | 'm4b'; // Output format
     bitrate: '128k' | '192k' | '320k'; // Audio bitrate
     normalize: boolean; // Apply loudness normalization
@@ -62,10 +63,11 @@ export interface FileJob {
 const AUTO_CHUNK_CHARS =
     process.platform === 'darwin' && process.arch === 'arm64' ? 900 : 600;
 
-const BACKEND_CHUNK_CHARS: Record<'auto' | 'pytorch' | 'mlx', number> = {
+const BACKEND_CHUNK_CHARS: Record<'auto' | 'pytorch' | 'mlx' | 'mock', number> = {
     auto: AUTO_CHUNK_CHARS,
     mlx: 900,
     pytorch: 600,
+    mock: 600,
 };
 
 const defaultConfig: TTSConfig = {
@@ -82,27 +84,6 @@ const defaultConfig: TTSConfig = {
     normalize: false, // Loudness normalization off by default
     checkpointEnabled: false, // Default off for stability/perf
 };
-
-function formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-}
-
-function formatDuration(ms: number): string {
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-
-    if (hours > 0) {
-        return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
-    } else if (minutes > 0) {
-        return `${minutes}m ${seconds % 60}s`;
-    }
-    return `${seconds}s`;
-}
 
 export function App() {
     const { exit } = useApp();
