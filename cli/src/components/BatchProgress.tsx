@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import Gradient from 'ink-gradient';
-import type { FileJob, TTSConfig } from '../App.js';
+import type { FileJob, TTSConfig } from '../types/profile.js';
 import { runTTS, type ProgressInfo, type ProcessingPhase } from '../utils/tts-runner.js';
 import { GpuMonitor } from './GpuMonitor.js';
 import * as path from 'path';

@@ -3,7 +3,7 @@ import { Box, Text, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import TextInput from 'ink-text-input';
 import * as path from 'path';
-import type { TTSConfig, FileJob } from '../App.js';
+import type { TTSConfig, FileJob } from '../types/profile.js';
 
 // Optimal chunk sizes per backend based on benchmarks
 // MLX: 900 chars = 180 chars/s (+11% vs 1200)

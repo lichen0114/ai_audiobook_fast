@@ -141,36 +141,48 @@ cd cli && npm install
 ### Launch
 
 ```bash
-# Start the interactive CLI
+# Start the interactive dashboard UI
 cd cli && npm run dev
 
-# For Apple Silicon GPU acceleration (recommended for M1/M2/M3 Macs)
-cd cli && npm run dev:mps
+# Explicitly launch dashboard mode
+cd cli && npm run dev -- tui
 ```
 
 ---
 
 ## 📖 Usage
 
-### Interactive Mode *(Recommended)*
+### Interactive Dashboard *(Recommended)*
 
-Launch the beautiful terminal interface:
+Launch the terminal dashboard:
 
 ```bash
-npm run dev
+cd cli && npm run dev
 ```
 
-The interactive CLI guides you through:
-1. 📂 **File Selection** — Choose single files, folders, or use patterns like `*.epub`
-2. ⚙️ **Configuration** — Pick your voice, adjust speed, set worker count, and language
-3. 🎧 **Processing** — Watch real-time progress as audiobooks are generated
+Core shortcuts:
+- `Tab` / `Shift+Tab` switch focus panels
+- `1` files panel, `2` config panel, `5` quick actions panel
+- `Enter` edit selected config or run selected action
+- `p` start batch
+- `Ctrl+S` save preset, `Ctrl+L` load preset
+- `?` help overlay
 
-### Command Line Mode
+### Non-Interactive Mode
 
-For scripting and automation:
+Use the new command surface for scripts and CI:
 
 ```bash
-python app.py --input /path/to/book.epub --output /path/to/book.mp3
+# Run a full batch from globs/paths
+cd cli && npm run dev -- run --input \"./books/*.epub\" --backend auto --format m4b
+
+# Run environment checks
+cd cli && npm run dev -- doctor
+
+# Manage presets
+cd cli && npm run dev -- presets list
+cd cli && npm run dev -- presets save weekday-batch
+cd cli && npm run dev -- presets export weekday-batch --out ./weekday-batch.profile.json
 ```
 
 <details>
@@ -178,13 +190,20 @@ python app.py --input /path/to/book.epub --output /path/to/book.mp3
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--input` | *required* | Path to input EPUB file |
-| `--output` | *required* | Path to output MP3 file |
+| `run --input <pathOrGlob...>` | *required* | File(s), directories, or glob patterns |
+| `--preset <name>` | none | Load a saved preset |
+| `--profile <path>` | none | Load profile JSON |
+| `--output-dir <path>` | same as input | Output directory |
+| `--format` | `mp3` | `mp3` or `m4b` |
 | `--voice` | `af_heart` | Voice selection (see below) |
-| `--lang_code` | `a` | Language code |
-| `--speed` | `1.0` | Speech speed (0.75–1.5) |
-| `--chunk_chars` | `900` (MLX) / `600` (PyTorch) | Characters per audio chunk |
-| `--workers` | `2` | Parallel workers for audio encoding (increase for faster processing) |
+| `--lang-code` | `a` | Accent code (`a`/`b`) |
+| `--speed` | `1.0` | Speech speed |
+| `--backend` | `auto` | `auto`, `pytorch`, `mlx`, `mock` |
+| `--bitrate` | `192k` | `128k`, `192k`, `320k` |
+| `--normalize` | off | Enable loudness normalization |
+| `--checkpoint` | off | Enable checkpoint writes |
+| `--resume` | off | Resume from available checkpoints |
+| `--json` | off | Emit machine-readable summary |
 
 </details>
 

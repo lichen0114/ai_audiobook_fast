@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import type { TTSConfig } from '../App.js';
+import type { TTSConfig } from '../types/profile.js';
 import { resolvePythonRuntime } from './python-runtime.js';
 
 export interface WorkerStatus {
