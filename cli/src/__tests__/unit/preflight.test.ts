@@ -67,10 +67,10 @@ describe('preflight utils', () => {
                     stderr: '',
                 } as any;
             }
-            if (argList[0] === '-c' && argList[1] === 'import kokoro') {
+            if (argList[0] === '-c' && argList[1]?.includes('find_spec("kokoro")')) {
                 return { status: state.kokoroStatus, stdout: '', stderr: '' } as any;
             }
-            if (argList[0] === '-c' && argList[1]?.includes('mlx_audio')) {
+            if (argList[0] === '-c' && argList[1]?.includes('find_spec("mlx_audio")')) {
                 return { status: state.mlxStatus, stdout: '', stderr: '' } as any;
             }
             return { status: 1, stdout: '', stderr: 'unexpected call' } as any;

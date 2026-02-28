@@ -19,6 +19,22 @@ export interface PreflightResult {
     checks: PreflightCheck[];
 }
 
+function hasPythonModule(venvPython: string, moduleName: string): boolean {
+    const result = spawnSync(
+        venvPython,
+        [
+            '-c',
+            `import importlib.util, sys; sys.exit(0 if importlib.util.find_spec(${JSON.stringify(moduleName)}) else 1)`,
+        ],
+        {
+            encoding: 'utf-8',
+            timeout: 5000,
+        }
+    );
+
+    return result.status === 0;
+}
+
 /**
  * Check if FFmpeg is installed
  */
@@ -112,13 +128,9 @@ function checkPythonDeps(): PreflightCheck {
     }
 
     try {
-        // Check if kokoro is importable
-        const result = spawnSync(venvPython, ['-c', 'import kokoro'], {
-            encoding: 'utf-8',
-            timeout: 10000,
-        });
-
-        if (result.status !== 0) {
+        // Use module discovery instead of importing kokoro, which eagerly loads
+        // torch-backed runtime code and can exceed a preflight timeout.
+        if (!hasPythonModule(venvPython, 'kokoro')) {
             return {
                 name: 'Python deps',
                 status: 'error',
@@ -182,13 +194,7 @@ export function checkMLXDeps(): PreflightCheck {
     }
 
     try {
-        // Check if mlx-audio is importable
-        const result = spawnSync(venvPython, ['-c', 'from mlx_audio.tts.models.kokoro import KokoroPipeline'], {
-            encoding: 'utf-8',
-            timeout: 10000,
-        });
-
-        if (result.status !== 0) {
+        if (!hasPythonModule(venvPython, 'mlx_audio')) {
             return {
                 name: 'MLX Backend',
                 status: 'warning',
