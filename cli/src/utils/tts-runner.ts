@@ -533,13 +533,33 @@ function shouldRetryWithAppleFallback(error: unknown, currentConfig: TTSConfig, 
 function getRunLogPath(projectRoot: string): string {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const homeBaseDir = path.join(os.homedir(), '.audiobook-maker', 'logs');
-    try {
-        fs.mkdirSync(homeBaseDir, { recursive: true });
+
+    const canWriteToDir = (dirPath: string): boolean => {
+        try {
+            fs.mkdirSync(dirPath, { recursive: true });
+            const probePath = path.join(
+                dirPath,
+                `.write-test-${process.pid}-${Date.now()}.tmp`,
+            );
+            const fd = fs.openSync(probePath, 'a');
+            fs.closeSync(fd);
+            fs.unlinkSync(probePath);
+            return true;
+        } catch {
+            return false;
+        }
+    };
+
+    if (canWriteToDir(homeBaseDir)) {
         return path.join(homeBaseDir, `run-${timestamp}.log`);
-    } catch {
-        const localBaseDir = path.join(projectRoot, '.logs');
+    }
+
+    const localBaseDir = path.join(projectRoot, '.logs');
+    try {
         fs.mkdirSync(localBaseDir, { recursive: true });
         return path.join(localBaseDir, `run-${timestamp}.log`);
+    } catch {
+        return path.join(projectRoot, `run-${timestamp}.log`);
     }
 }
 
