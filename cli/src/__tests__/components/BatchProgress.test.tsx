@@ -2,7 +2,7 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render } from 'ink-testing-library';
 
-import type { FileJob, TTSConfig } from '../../types/profile.js';
+import type { BatchJobPlan, FileJob, TTSConfig } from '../../types/profile.js';
 
 vi.mock('ink', async () => {
     const actual = await vi.importActual<any>('ink');
@@ -25,6 +25,10 @@ vi.mock('../../utils/tts-runner.js', () => ({
     runTTS: vi.fn(),
 }));
 
+vi.mock('../../utils/checkpoint.js', () => ({
+    deleteCheckpoint: vi.fn(() => Promise.resolve()),
+}));
+
 import { BatchProgress } from '../../components/BatchProgress.js';
 import { runTTS, type ProgressInfo } from '../../utils/tts-runner.js';
 
@@ -35,7 +39,7 @@ const baseConfig: TTSConfig = {
     chunkChars: 900,
     useMPS: true,
     outputDir: null,
-    workers: 2,
+    workers: 1,
     backend: 'auto',
     outputFormat: 'mp3',
     bitrate: '192k',
@@ -55,16 +59,50 @@ function createFileJob(id: string, inputPath: string): FileJob {
     };
 }
 
+function createJobPlan(file: FileJob, overrides: Partial<BatchJobPlan> = {}): BatchJobPlan {
+    return {
+        id: file.id,
+        inputPath: file.inputPath,
+        outputPath: file.outputPath,
+        format: 'mp3',
+        config: baseConfig,
+        metadata: {
+            title: file.inputPath.split('/').pop() || file.inputPath,
+            author: 'Unknown Author',
+            hasCover: false,
+        },
+        checkpoint: {
+            exists: false,
+            resumeCompatible: false,
+            action: 'ignore',
+        },
+        estimate: {
+            totalChars: 1000,
+            totalChunks: 1,
+            chapterCount: 1,
+        },
+        warnings: [],
+        errors: [],
+        ...overrides,
+    };
+}
+
 function BatchProgressHarness({
     initialFiles,
+    jobPlans,
     onComplete,
     onFilesChange,
 }: {
     initialFiles: FileJob[];
+    jobPlans?: BatchJobPlan[];
     onComplete: () => void;
     onFilesChange: (files: FileJob[]) => void;
 }) {
     const [files, setFiles] = React.useState<FileJob[]>(initialFiles);
+    const plans = React.useMemo(
+        () => jobPlans ?? initialFiles.map((file) => createJobPlan(file)),
+        [initialFiles, jobPlans],
+    );
 
     React.useEffect(() => {
         onFilesChange(files);
@@ -74,7 +112,7 @@ function BatchProgressHarness({
         <BatchProgress
             files={files}
             setFiles={setFiles}
-            config={baseConfig}
+            jobPlans={plans}
             onComplete={onComplete}
         />
     );
@@ -307,19 +345,18 @@ RuntimeError: Something went wrong`;
     });
 
     describe('Progress calculation', () => {
-        it('should calculate overall progress', () => {
+        it('should calculate weighted overall progress', () => {
             const files = [
-                { status: 'done' },
-                { status: 'done' },
-                { status: 'error' },
-                { status: 'pending' },
+                { status: 'done', progress: 100 },
+                { status: 'processing', progress: 50 },
+                { status: 'pending', progress: 0 },
             ];
+            const weights = [100, 200, 300];
+            const completedWeight = weights[0] + weights[1] * 0.5;
+            const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+            const overallProgress = Math.round((completedWeight / totalWeight) * 100);
 
-            const completedCount = files.filter(f => f.status === 'done').length;
-            const errorCount = files.filter(f => f.status === 'error').length;
-            const overallProgress = Math.round(((completedCount + errorCount) / files.length) * 100);
-
-            expect(overallProgress).toBe(75);
+            expect(overallProgress).toBe(33);
         });
     });
 

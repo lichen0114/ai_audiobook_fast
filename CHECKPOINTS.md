@@ -50,21 +50,26 @@ If the checkpoint is compatible, completed chunks are reused and the backend con
 .venv/bin/python app.py --check_checkpoint --input book.epub --output book.mp3
 ```
 
-This is useful for scripts or UI pre-checks.
+This is useful for scripts or lightweight UI probes.
+
+### 4. Inspect a job with full resume compatibility
+
+```bash
+.venv/bin/python app.py --inspect_job --event_format json \
+  --input book.epub --output book.mp3
+```
+
+Unlike `--check_checkpoint`, this mode performs the same compatibility checks used by resume mode and also reports chunk/work estimates.
 
 ## CLI Behavior (Interactive UI)
 
-The interactive CLI uses checkpoint features in two places:
-
-1. Pre-check before processing (`cli/src/utils/checkpoint.ts`)
-2. Resume dialog (`cli/src/components/ResumeDialog.tsx`)
+The interactive CLI now uses a planning pass before processing starts.
 
 Current behavior:
-- The CLI checks for a checkpoint before starting processing.
-- If it finds one, it offers:
-  - resume from checkpoint
-  - start fresh (deletes the checkpoint directory)
-- The pre-check currently probes the first selected file in the batch.
+- The planner inspects every selected file, not just the first one.
+- Compatible checkpoints are marked to resume automatically on a per-file basis.
+- Incompatible checkpoints are marked `start-fresh` and deleted just before that file runs.
+- The review screen shows resumable files, warnings, and blocked output collisions before execution starts.
 
 ## What Gets Stored
 
@@ -97,7 +102,7 @@ Important limitation:
 - `--check_checkpoint` verifies checkpoint existence and EPUB hash match.
 - It does **not** perform the full config compatibility validation used by `--resume`.
 
-This is why a UI may show a resume option and the actual resume run may still fall back due to config mismatch.
+Use `--inspect_job` when you need the same compatibility answer the runtime uses for `--resume`.
 
 ## Full Resume Validation (`--resume`)
 

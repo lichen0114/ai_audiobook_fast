@@ -75,30 +75,19 @@ describe('ConfigPanel', () => {
         });
     });
 
-    describe('Worker options', () => {
-        const workers = [
-            { label: '1 Worker (Recommended for MPS)', value: '1' },
-            { label: '2 Workers (Balanced)', value: '2' },
-            { label: '4 Workers (Max for Apple Silicon)', value: '4' },
-        ];
-
-        it('should have worker options', () => {
-            expect(workers.length).toBe(3);
-        });
-
-        it('should recommend 1-2 workers for MPS', () => {
-            const recommended = workers.find(w => w.label.includes('Recommended'));
-            expect(recommended?.value).toBe('1');
+    describe('Batch mode', () => {
+        it('should default the compatibility worker flag to 1', () => {
+            const config = { workers: 1 };
+            expect(config.workers).toBe(1);
         });
     });
 
     describe('Configuration steps', () => {
-        const steps = ['voice', 'speed', 'workers', 'checkpoint', 'gpu', 'output', 'output_custom', 'confirm'];
+        const steps = ['voice', 'speed', 'checkpoint', 'gpu', 'output', 'output_custom', 'confirm'];
 
         it('should have all configuration steps', () => {
             expect(steps.includes('voice')).toBe(true);
             expect(steps.includes('speed')).toBe(true);
-            expect(steps.includes('workers')).toBe(true);
             expect(steps.includes('checkpoint')).toBe(true);
             expect(steps.includes('gpu')).toBe(true);
             expect(steps.includes('output')).toBe(true);

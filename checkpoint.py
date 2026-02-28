@@ -33,6 +33,18 @@ class CheckpointState:
         )
 
 
+@dataclass
+class CheckpointInspection:
+    """Detailed checkpoint compatibility result for planning and resume UX."""
+
+    exists: bool
+    resume_compatible: bool
+    total_chunks: Optional[int] = None
+    completed_chunks: int = 0
+    reason: Optional[str] = None
+    missing_audio_chunks: Optional[List[int]] = None
+
+
 def compute_epub_hash(epub_path: str) -> str:
     """Compute SHA-256 hash of EPUB file for verification."""
     hasher = hashlib.sha256()
@@ -103,21 +115,27 @@ def cleanup_checkpoint(checkpoint_dir: str) -> None:
         shutil.rmtree(checkpoint_dir)
 
 
-def verify_checkpoint(checkpoint_dir: str, epub_path: str, config: Dict[str, Any]) -> bool:
-    """Verify that a checkpoint is valid for the current job.
-
-    Checks:
-    1. EPUB file hash matches
-    2. Config matches (voice, speed, etc.)
-    """
+def inspect_checkpoint(
+    checkpoint_dir: str,
+    epub_path: str,
+    config: Dict[str, Any],
+    expected_total_chunks: Optional[int] = None,
+) -> CheckpointInspection:
+    """Inspect a checkpoint using the same compatibility rules as resume mode."""
     state = load_checkpoint(checkpoint_dir)
     if state is None:
-        return False
+        return CheckpointInspection(exists=False, resume_compatible=False, reason="missing")
 
     # Verify EPUB hash
     current_hash = compute_epub_hash(epub_path)
     if state.epub_hash != current_hash:
-        return False
+        return CheckpointInspection(
+            exists=True,
+            resume_compatible=False,
+            total_chunks=state.total_chunks,
+            completed_chunks=len(state.completed_chunks),
+            reason="hash_mismatch",
+        )
 
     # Verify key config options match.
     # Include text splitting and export options to avoid resuming incompatible jobs.
@@ -134,6 +152,43 @@ def verify_checkpoint(checkpoint_dir: str, epub_path: str, config: Dict[str, Any
     ]
     for key in key_options:
         if state.config.get(key) != config.get(key):
-            return False
+            return CheckpointInspection(
+                exists=True,
+                resume_compatible=False,
+                total_chunks=state.total_chunks,
+                completed_chunks=len(state.completed_chunks),
+                reason="config_mismatch",
+            )
 
-    return True
+    if expected_total_chunks is not None and state.total_chunks != expected_total_chunks:
+        return CheckpointInspection(
+            exists=True,
+            resume_compatible=False,
+            total_chunks=state.total_chunks,
+            completed_chunks=len(state.completed_chunks),
+            reason="chunk_mismatch",
+        )
+
+    missing_audio_chunks = [
+        chunk_idx
+        for chunk_idx in state.completed_chunks
+        if load_chunk_audio(checkpoint_dir, chunk_idx) is None
+    ]
+    usable_completed = len(state.completed_chunks) - len(missing_audio_chunks)
+
+    return CheckpointInspection(
+        exists=True,
+        resume_compatible=True,
+        total_chunks=state.total_chunks,
+        completed_chunks=max(usable_completed, 0),
+        missing_audio_chunks=missing_audio_chunks,
+    )
+
+
+def verify_checkpoint(checkpoint_dir: str, epub_path: str, config: Dict[str, Any]) -> bool:
+    """Verify that a checkpoint is valid for the current job."""
+    return inspect_checkpoint(
+        checkpoint_dir,
+        epub_path,
+        config,
+    ).resume_compatible

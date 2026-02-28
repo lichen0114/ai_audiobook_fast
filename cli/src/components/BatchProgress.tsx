@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import Gradient from 'ink-gradient';
-import type { FileJob, TTSConfig } from '../types/profile.js';
+import type { BatchJobPlan, FileJob } from '../types/profile.js';
 import { runTTS, type ProgressInfo, type ProcessingPhase } from '../utils/tts-runner.js';
+import { runBatchScheduler } from '../utils/batch-scheduler.js';
+import { deleteCheckpoint } from '../utils/checkpoint.js';
 import { GpuMonitor } from './GpuMonitor.js';
 import * as path from 'path';
 
@@ -104,7 +106,7 @@ function parseErrorMessage(error: string): string {
 interface BatchProgressProps {
     files: FileJob[];
     setFiles: React.Dispatch<React.SetStateAction<FileJob[]>>;
-    config: TTSConfig;
+    jobPlans: BatchJobPlan[];
     onComplete: () => void;
 }
 
@@ -182,15 +184,53 @@ function MiniChunksIndicator({ current, total }: { current: number; total: numbe
     );
 }
 
+function formatRemainingTime(ms: number): string {
+    if (!Number.isFinite(ms) || ms <= 0) {
+        return 'Calculating...';
+    }
+
+    if (ms > 60000) {
+        return `${Math.round(ms / 60000)} min`;
+    }
+    return `${Math.round(ms / 1000)} sec`;
+}
+
+function getWeightedBatchProgress(files: FileJob[], jobPlans: BatchJobPlan[]): number {
+    const totalWeight = Math.max(
+        jobPlans.reduce((sum, job) => sum + (job.estimate.totalChars || job.estimate.totalChunks || 1), 0),
+        1,
+    );
+    const planById = new Map(jobPlans.map((job) => [job.id, job]));
+    const completedWeight = files.reduce((sum, file) => {
+        const plan = planById.get(file.id);
+        const weight = plan ? (plan.estimate.totalChars || plan.estimate.totalChunks || 1) : 1;
+        if (file.status === 'done' || file.status === 'skipped') {
+            return sum + weight;
+        }
+        if (file.status === 'error') {
+            return sum + weight * (file.progress / 100);
+        }
+        if (file.status === 'processing') {
+            return sum + weight * (file.progress / 100);
+        }
+        return sum;
+    }, 0);
+
+    return Math.round((completedWeight / totalWeight) * 100);
+}
+
 function FileStatus({ file, isActive }: { file: FileJob; isActive?: boolean }) {
     const getStatusIcon = () => {
         switch (file.status) {
             case 'pending':
+            case 'ready':
                 return <Text color="gray" dimColor>⏳</Text>;
             case 'processing':
                 return <Text color="cyan">►</Text>;
             case 'done':
                 return <Text color="green">✔</Text>;
+            case 'skipped':
+                return <Text color="yellow">↷</Text>;
             case 'error':
                 return <Text color="red">✘</Text>;
         }
@@ -198,9 +238,12 @@ function FileStatus({ file, isActive }: { file: FileJob; isActive?: boolean }) {
 
     const getStatusColor = (): string => {
         switch (file.status) {
-            case 'pending': return 'gray';
+            case 'pending':
+            case 'ready':
+                return 'gray';
             case 'processing': return 'cyan';
             case 'done': return 'green';
+            case 'skipped': return 'yellow';
             case 'error': return 'red';
         }
     };
@@ -215,6 +258,9 @@ function FileStatus({ file, isActive }: { file: FileJob; isActive?: boolean }) {
                 </Text>
                 {file.status === 'done' && (
                     <Text dimColor> → saved</Text>
+                )}
+                {file.status === 'skipped' && (
+                    <Text dimColor> → skipped</Text>
                 )}
             </Box>
             {file.status === 'processing' && (
@@ -234,7 +280,7 @@ function FileStatus({ file, isActive }: { file: FileJob; isActive?: boolean }) {
     );
 }
 
-export function BatchProgress({ files, setFiles, config, onComplete }: BatchProgressProps) {
+export function BatchProgress({ files, setFiles, jobPlans, onComplete }: BatchProgressProps) {
     const { exit } = useApp();
     const [currentIndex, setCurrentIndex] = useState(0);
     const [startTime] = useState(Date.now());
@@ -273,8 +319,14 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
     });
 
     const completedCount = files.filter(f => f.status === 'done').length;
+    const skippedCount = files.filter(f => f.status === 'skipped').length;
     const errorCount = files.filter(f => f.status === 'error').length;
-    const overallProgress = Math.round(((completedCount + errorCount) / files.length) * 100);
+    const overallProgress = getWeightedBatchProgress(files, jobPlans);
+    const batchEta = overallProgress <= 0
+        ? 'Calculating...'
+        : overallProgress >= 100
+            ? 'Done'
+            : formatRemainingTime((elapsedTime / overallProgress) * (100 - overallProgress));
 
     const [workerStates, setWorkerStates] = useState<Map<number, { status: string; details: string }>>(new Map());
 
@@ -361,37 +413,76 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
         filesRef.current = files;
     }, [files]);
 
+    const onCompleteRef = React.useRef(onComplete);
     useEffect(() => {
+        onCompleteRef.current = onComplete;
+    }, [onComplete]);
+
+    useEffect(() => {
+        const resetTelemetry = () => {
+            workerStatesRef.current = new Map();
+            hasWorkerUpdates.current = true;
+            recoveryInfoRef.current = undefined;
+            hasRecoveryUpdate.current = true;
+            parseCurrentItemRef.current = undefined;
+            parseTotalItemsRef.current = undefined;
+            parseChapterCountRef.current = undefined;
+            hasParseUpdate.current = true;
+            currentPhaseRef.current = undefined;
+            hasPhaseUpdate.current = true;
+            emaChunkTimeRef.current = undefined;
+            hasTimingUpdate.current = true;
+            totalCharsRef.current = undefined;
+            hasCharsUpdate.current = true;
+            etaRef.current = 'Calculating...';
+            lastHeartbeatRef.current = Date.now();
+        };
+
+        const patchFile = (index: number, updater: (file: FileJob) => FileJob) => {
+            setFiles((prev) => {
+                const next = prev.map((file, idx) => (
+                    idx === index ? updater(file) : file
+                ));
+                filesRef.current = next;
+                hasFileUpdates.current = true;
+                return next;
+            });
+        };
+
         const processFiles = async () => {
-            for (let i = 0; i < files.length; i++) {
-                setCurrentIndex(i);
-
-                // Clear worker states for new file
-                workerStatesRef.current = new Map();
-                hasWorkerUpdates.current = true; // Force update
-                recoveryInfoRef.current = undefined;
-                hasRecoveryUpdate.current = true;
-                parseCurrentItemRef.current = undefined;
-                parseTotalItemsRef.current = undefined;
-                parseChapterCountRef.current = undefined;
-                hasParseUpdate.current = true;
-                etaRef.current = 'Calculating...';
-
-                // Update status to processing
-                setFiles(prev => {
-                    const next = prev.map((f, idx) =>
-                        idx === i ? { ...f, status: 'processing' as const } : f
-                    );
-                    filesRef.current = next;
-                    hasFileUpdates.current = true;
-                    return next;
-                });
-
-                try {
+            await runBatchScheduler(jobPlans, {
+                onJobSkipped: async (job, index) => {
+                    setCurrentIndex(index);
+                    resetTelemetry();
+                    patchFile(index, (file) => ({
+                        ...file,
+                        status: 'skipped',
+                        error: job.errors[0] ?? (job.blocked ? 'Blocked by output path collision' : 'Skipped'),
+                        totalChars: job.estimate.totalChars,
+                        totalChunks: job.estimate.totalChunks,
+                    }));
+                },
+                onJobStart: async (job, index) => {
+                    setCurrentIndex(index);
+                    resetTelemetry();
+                    if (job.checkpoint.action === 'start-fresh' && job.checkpoint.exists) {
+                        await deleteCheckpoint(job.outputPath);
+                    }
+                    patchFile(index, (file) => ({
+                        ...file,
+                        status: 'processing',
+                        progress: 0,
+                        error: undefined,
+                        currentChunk: undefined,
+                        totalChunks: job.estimate.totalChunks,
+                        totalChars: job.estimate.totalChars,
+                    }));
+                },
+                runJob: async (job, index) => {
                     await runTTS(
-                        files[i].inputPath,
-                        files[i].outputPath,
-                        config,
+                        job.inputPath,
+                        job.outputPath,
+                        job.config,
                         (progressInfo: ProgressInfo) => {
                             if (progressInfo.recovery) {
                                 recoveryInfoRef.current = progressInfo.recovery;
@@ -412,8 +503,8 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                                 lastHeartbeatRef.current = Date.now();
 
                                 const currentFiles = [...filesRef.current];
-                                currentFiles[i] = {
-                                    ...currentFiles[i],
+                                currentFiles[index] = {
+                                    ...currentFiles[index],
                                     progress: 0,
                                     currentChunk: undefined,
                                     totalChunks: undefined,
@@ -423,17 +514,15 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                                 hasFileUpdates.current = true;
                             }
 
-                            // Update phase
                             if (progressInfo.phase && progressInfo.phase !== currentPhaseRef.current) {
                                 currentPhaseRef.current = progressInfo.phase;
                                 hasPhaseUpdate.current = true;
-                                // Reset heartbeat timer on phase change
                                 lastHeartbeatRef.current = Date.now();
 
                                 if (progressInfo.phase === 'INFERENCE') {
                                     const currentFiles = [...filesRef.current];
-                                    currentFiles[i] = {
-                                        ...currentFiles[i],
+                                    currentFiles[index] = {
+                                        ...currentFiles[index],
                                         progress: 0,
                                     };
                                     filesRef.current = currentFiles;
@@ -441,12 +530,10 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                                 }
                             }
 
-                            // Update heartbeat timestamp
                             if (progressInfo.heartbeatTs) {
                                 lastHeartbeatRef.current = Date.now();
                             }
 
-                            // Update per-chunk timing with EMA
                             if (progressInfo.chunkTimingMs !== undefined) {
                                 if (emaChunkTimeRef.current === undefined) {
                                     emaChunkTimeRef.current = progressInfo.chunkTimingMs;
@@ -454,11 +541,9 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                                     emaChunkTimeRef.current = EMA_ALPHA * progressInfo.chunkTimingMs + (1 - EMA_ALPHA) * emaChunkTimeRef.current;
                                 }
                                 hasTimingUpdate.current = true;
-                                // Also update heartbeat on timing
                                 lastHeartbeatRef.current = Date.now();
                             }
 
-                            // Update total characters
                             if (progressInfo.totalChars !== undefined && progressInfo.totalChars !== totalCharsRef.current) {
                                 totalCharsRef.current = progressInfo.totalChars;
                                 hasCharsUpdate.current = true;
@@ -477,33 +562,30 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                                 lastHeartbeatRef.current = Date.now();
 
                                 const parseProgress = Math.round(
-                                    (progressInfo.parseCurrentItem / progressInfo.parseTotalItems) * 100
+                                    (progressInfo.parseCurrentItem / progressInfo.parseTotalItems) * 100,
                                 );
                                 const currentFiles = [...filesRef.current];
-                                currentFiles[i] = {
-                                    ...currentFiles[i],
+                                currentFiles[index] = {
+                                    ...currentFiles[index],
                                     progress: parseProgress,
                                 };
                                 filesRef.current = currentFiles;
                                 hasFileUpdates.current = true;
                             }
 
-                            // Update Worker Status Ref (No re-render)
                             if (progressInfo.workerStatus) {
                                 const { id, status, details } = progressInfo.workerStatus;
                                 const next = new Map(workerStatesRef.current);
                                 next.set(id, { status, details });
                                 workerStatesRef.current = next;
                                 hasWorkerUpdates.current = true;
-                                // Also update heartbeat on worker activity
                                 lastHeartbeatRef.current = Date.now();
                             }
 
-                            // Update Progress Ref (No re-render)
                             if (progressInfo.totalChunks > 0) {
                                 const currentFiles = [...filesRef.current];
-                                currentFiles[i] = {
-                                    ...currentFiles[i],
+                                currentFiles[index] = {
+                                    ...currentFiles[index],
                                     progress: progressInfo.progress,
                                     currentChunk: progressInfo.currentChunk,
                                     totalChunks: progressInfo.totalChunks,
@@ -512,91 +594,55 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                                 hasFileUpdates.current = true;
                             }
 
-                            // Update ETA with EMA-based calculation
                             if (progressInfo.totalChunks > 0 && progressInfo.currentChunk > 0) {
                                 let remainingTime: number;
 
                                 if (emaChunkTimeRef.current !== undefined) {
-                                    // Use EMA for smoother estimates
                                     const remainingChunks = progressInfo.totalChunks - progressInfo.currentChunk;
                                     remainingTime = emaChunkTimeRef.current * remainingChunks;
                                 } else {
-                                    // Fallback to simple average
                                     const elapsed = Date.now() - startTime;
                                     const avgTimePerChunk = elapsed / progressInfo.currentChunk;
                                     const remainingChunks = progressInfo.totalChunks - progressInfo.currentChunk;
                                     remainingTime = avgTimePerChunk * remainingChunks;
                                 }
 
-                                if (remainingTime > 60000) {
-                                    etaRef.current = `${Math.round(remainingTime / 60000)} min`;
-                                } else {
-                                    etaRef.current = `${Math.round(remainingTime / 1000)} sec`;
-                                }
+                                etaRef.current = formatRemainingTime(remainingTime);
                             }
-                        }
+                        },
                     );
-
-                    // Mark as done with stats
-                    setFiles(prev => {
-                        const next = prev.map((f, idx) =>
-                            idx === i ? {
-                                ...f,
-                                status: 'done' as const,
-                                progress: 100,
-                                totalChars: totalCharsRef.current,
-                                avgChunkTimeMs: emaChunkTimeRef.current,
-                            } : f
-                        );
-                        filesRef.current = next;
-                        return next;
-                    });
-
-                    // Reset stats for next file
-                    emaChunkTimeRef.current = undefined;
-                    totalCharsRef.current = undefined;
-                    currentPhaseRef.current = undefined;
-                    recoveryInfoRef.current = undefined;
-                    hasRecoveryUpdate.current = true;
-                    parseCurrentItemRef.current = undefined;
-                    parseTotalItemsRef.current = undefined;
-                    parseChapterCountRef.current = undefined;
-                    hasParseUpdate.current = true;
-                } catch (error) {
-                    // Mark as error with user-friendly message
+                },
+                onJobSuccess: async (job, index) => {
+                    patchFile(index, (file) => ({
+                        ...file,
+                        status: 'done',
+                        progress: 100,
+                        currentChunk: file.totalChunks,
+                        totalChars: totalCharsRef.current ?? job.estimate.totalChars,
+                        avgChunkTimeMs: emaChunkTimeRef.current,
+                    }));
+                    resetTelemetry();
+                },
+                onJobError: async (job, index, error) => {
                     const rawError = error instanceof Error ? error.message : 'Unknown error';
                     const friendlyError = parseErrorMessage(rawError);
 
-                    setFiles(prev => {
-                        const next = prev.map((f, idx) =>
-                            idx === i ? {
-                                ...f,
-                                status: 'error' as const,
-                                error: friendlyError
-                            } : f
-                        );
-                        filesRef.current = next;
-                        return next;
-                    });
+                    patchFile(index, (file) => ({
+                        ...file,
+                        status: 'error',
+                        error: friendlyError,
+                        totalChars: totalCharsRef.current ?? job.estimate.totalChars,
+                        totalChunks: file.totalChunks ?? job.estimate.totalChunks,
+                    }));
+                    resetTelemetry();
+                },
+            });
 
-                    // Reset stats for next file
-                    emaChunkTimeRef.current = undefined;
-                    totalCharsRef.current = undefined;
-                    currentPhaseRef.current = undefined;
-                    recoveryInfoRef.current = undefined;
-                    hasRecoveryUpdate.current = true;
-                    parseCurrentItemRef.current = undefined;
-                    parseTotalItemsRef.current = undefined;
-                    parseChapterCountRef.current = undefined;
-                    hasParseUpdate.current = true;
-                }
-            }
-
-            onComplete();
+            onCompleteRef.current();
         };
 
         processFiles();
-    }, []);
+    }, [jobPlans, setFiles, startTime]);
 
     const currentFile = files[currentIndex];
     const parseProgress = (
@@ -722,6 +768,8 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                                     <Text color="cyan">{totalChars.toLocaleString()}</Text>
                                 </>
                             )}
+                            <Text dimColor>  •  File ETA: </Text>
+                            <Text color="yellow" bold>{eta}</Text>
                         </Box>
                     )}
                     <Box marginTop={1}>
@@ -762,24 +810,27 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                 marginBottom={1}
                 width="100%"
             >
-                <Box justifyContent="space-between">
-                    <Box>
-                        <Text dimColor>Overall Progress: </Text>
-                        <Text bold color="green">{completedCount}</Text>
-                        <Text dimColor>/</Text>
-                        <Text>{files.length}</Text>
-                        <Text dimColor> files</Text>
-                        {errorCount > 0 && (
-                            <Text color="red"> ({errorCount} errors)</Text>
-                        )}
+                    <Box justifyContent="space-between">
+                        <Box>
+                            <Text dimColor>Batch Progress: </Text>
+                            <Text bold color="green">{completedCount}</Text>
+                            <Text dimColor>/</Text>
+                            <Text>{files.length}</Text>
+                            <Text dimColor> files complete</Text>
+                            {skippedCount > 0 && (
+                                <Text color="yellow"> ({skippedCount} skipped)</Text>
+                            )}
+                            {errorCount > 0 && (
+                                <Text color="red"> ({errorCount} errors)</Text>
+                            )}
+                        </Box>
+                        <Box>
+                            <Text dimColor>⏱️  Elapsed: </Text>
+                            <Text color="cyan">{formatElapsed(elapsedTime)}</Text>
+                            <Text dimColor>  •  Batch ETA: </Text>
+                            <Text color="yellow" bold>{batchEta}</Text>
+                        </Box>
                     </Box>
-                    <Box>
-                        <Text dimColor>⏱️  Elapsed: </Text>
-                        <Text color="cyan">{formatElapsed(elapsedTime)}</Text>
-                        <Text dimColor>  •  ETA: </Text>
-                        <Text color="yellow" bold>{eta}</Text>
-                    </Box>
-                </Box>
                 <Box marginTop={1}>
                     <ProgressBar progress={overallProgress} width={40} useGradient={true} />
                 </Box>

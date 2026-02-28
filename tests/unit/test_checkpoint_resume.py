@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app import main, TextChunk
-from checkpoint import CheckpointState, save_checkpoint, verify_checkpoint
+from checkpoint import CheckpointState, inspect_checkpoint, save_checkpoint, save_chunk_audio, verify_checkpoint
 
 
 @pytest.mark.unit
@@ -105,6 +105,90 @@ def test_verify_checkpoint_rejects_split_pattern_mismatch(temp_dir):
 
 
 @pytest.mark.unit
+def test_inspect_checkpoint_reports_reason_for_chunk_mismatch(temp_dir):
+    epub_path = f"{temp_dir}/book.epub"
+    checkpoint_dir = f"{temp_dir}/book.mp3.checkpoint"
+
+    with open(epub_path, "wb") as f:
+        f.write(b"dummy-epub")
+
+    from checkpoint import compute_epub_hash
+
+    state = CheckpointState(
+        epub_hash=compute_epub_hash(epub_path),
+        config={
+            "voice": "af_heart",
+            "speed": 1.0,
+            "lang_code": "a",
+            "backend": "pytorch",
+            "chunk_chars": 600,
+            "split_pattern": r"\n+",
+            "format": "mp3",
+            "bitrate": "192k",
+            "normalize": False,
+        },
+        total_chunks=10,
+        completed_chunks=[0, 1],
+        chapter_start_indices=[(0, "Chapter 1")],
+    )
+    save_checkpoint(checkpoint_dir, state)
+
+    inspection = inspect_checkpoint(
+        checkpoint_dir,
+        epub_path,
+        state.config,
+        expected_total_chunks=9,
+    )
+
+    assert inspection.exists is True
+    assert inspection.resume_compatible is False
+    assert inspection.reason == "chunk_mismatch"
+
+
+@pytest.mark.unit
+def test_inspect_checkpoint_counts_missing_audio_chunks_as_regeneratable(temp_dir):
+    epub_path = f"{temp_dir}/book.epub"
+    checkpoint_dir = f"{temp_dir}/book.mp3.checkpoint"
+
+    with open(epub_path, "wb") as f:
+        f.write(b"dummy-epub")
+
+    from checkpoint import compute_epub_hash
+
+    state = CheckpointState(
+        epub_hash=compute_epub_hash(epub_path),
+        config={
+            "voice": "af_heart",
+            "speed": 1.0,
+            "lang_code": "a",
+            "backend": "pytorch",
+            "chunk_chars": 600,
+            "split_pattern": r"\n+",
+            "format": "mp3",
+            "bitrate": "192k",
+            "normalize": False,
+        },
+        total_chunks=2,
+        completed_chunks=[0, 1],
+        chapter_start_indices=[(0, "Chapter 1")],
+    )
+    save_checkpoint(checkpoint_dir, state)
+    save_chunk_audio(checkpoint_dir, 0, np.array([1, 2, 3], dtype=np.int16))
+
+    inspection = inspect_checkpoint(
+        checkpoint_dir,
+        epub_path,
+        state.config,
+        expected_total_chunks=2,
+    )
+
+    assert inspection.exists is True
+    assert inspection.resume_compatible is True
+    assert inspection.completed_chunks == 1
+    assert inspection.missing_audio_chunks == [1]
+
+
+@pytest.mark.unit
 def test_resume_reuses_saved_chunk_audio_in_order(temp_dir):
     epub_path = f"{temp_dir}/book.epub"
     output_path = f"{temp_dir}/book.mp3"
@@ -142,7 +226,17 @@ def test_resume_reuses_saved_chunk_audio_in_order(temp_dir):
     ]):
         with patch("app.verify_checkpoint", return_value=True):
             with patch("app.load_checkpoint", return_value=checkpoint_state):
-                with patch("app.extract_epub_text", return_value=[("Chapter 1", "Hello world")]):
+                with patch(
+                    "app.parse_epub",
+                    return_value=type(
+                        "Parsed",
+                        (),
+                        {
+                            "metadata": None,
+                            "chapters": [("Chapter 1", "Hello world")],
+                        },
+                    )(),
+                ):
                     with patch("app.split_text_to_chunks", return_value=([TextChunk("Chapter 1", "Hello world")], [(0, "Chapter 1")])):
                         with patch("app.create_backend", return_value=backend):
                             with patch("app.load_chunk_audio", return_value=np.array([1, 2, 3], dtype=np.int16)) as mock_load_chunk:

@@ -78,7 +78,7 @@ const bitrates = [
     { label: '🎼 320k (High quality)', value: '320k' },
 ];
 
-type ConfigStep = 'accent' | 'voice' | 'speed' | 'backend' | 'format' | 'quality' | 'workers' | 'checkpoint' | 'gpu' | 'output' | 'output_custom' | 'confirm';
+type ConfigStep = 'accent' | 'voice' | 'speed' | 'backend' | 'format' | 'quality' | 'checkpoint' | 'gpu' | 'output' | 'output_custom' | 'confirm';
 
 export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelProps) {
     const [step, setStep] = useState<ConfigStep>('accent');
@@ -88,7 +88,6 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
     const [selectedBackend, setSelectedBackend] = useState<'auto' | 'pytorch' | 'mlx' | 'mock'>(config.backend || 'auto');
     const [selectedFormat, setSelectedFormat] = useState<'mp3' | 'm4b'>(config.outputFormat || 'mp3');
     const [selectedChunkChars, setSelectedChunkChars] = useState(config.chunkChars || BACKEND_CHUNK_CHARS[config.backend || 'auto']);
-    const [selectedWorkers, setSelectedWorkers] = useState(config.workers || DEFAULT_WORKERS);
     const [useMPS, setUseMPS] = useState(config.useMPS);
     const [checkpointEnabled, setCheckpointEnabled] = useState(config.checkpointEnabled || false);
     const [outputDir, setOutputDir] = useState<string | null>(config.outputDir);
@@ -153,11 +152,6 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
             // Bitrate selection
             setSelectedBitrate(item.value as '128k' | '192k' | '320k');
         }
-        setStep('workers');
-    };
-
-    const handleWorkerSelect = (item: { value: string }) => {
-        setSelectedWorkers(parseInt(item.value));
         setStep('checkpoint');
     };
 
@@ -204,7 +198,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                 backend: selectedBackend,
                 outputFormat: selectedFormat,
                 chunkChars: selectedChunkChars,
-                workers: selectedWorkers,
+                workers: DEFAULT_WORKERS,
                 useMPS,
                 outputDir,
                 bitrate: selectedBitrate,
@@ -225,8 +219,6 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
             setStep('format');
         } else if (item.value === 'quality') {
             setStep('quality');
-        } else if (item.value === 'workers') {
-            setStep('workers');
         } else if (item.value === 'checkpoint') {
             setStep('checkpoint');
         } else if (item.value === 'gpu') {
@@ -298,7 +290,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                         🎚️  Quality: <Text color={step === 'quality' ? 'yellow' : 'green'}>{getBitrateLabel(selectedBitrate)}{normalize ? ' + Normalized' : ''}</Text>
                     </Text>
                     <Text>
-                        🔨 Workers: <Text color={step === 'workers' ? 'yellow' : 'green'}>{selectedWorkers}</Text>
+                        📦 Batch mode: <Text color="green">One file at a time</Text>
                     </Text>
                     <Text>
                         💾 Checkpointing: <Text color={step === 'checkpoint' ? 'yellow' : checkpointEnabled ? 'green' : 'gray'}>{checkpointEnabled ? 'Enabled' : 'Disabled'}</Text>
@@ -403,25 +395,6 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                 </Box>
             )}
 
-            {/* Worker Selection */}
-            {step === 'workers' && (
-                <Box flexDirection="column">
-                    <Text color="yellow" bold>Worker compatibility setting:</Text>
-                    <Text dimColor>Current backend runs sequential inference. Keep this at 1 for the safest Mac batch runs.</Text>
-                    <Box marginTop={1}>
-                        <SelectInput
-                            items={[
-                                { label: '1 Worker (Recommended)', value: '1' },
-                                { label: '2 Workers (Compatibility)', value: '2' },
-                                { label: '4 Workers (Compatibility)', value: '4' },
-                            ]}
-                            onSelect={handleWorkerSelect}
-                            initialIndex={[1, 2, 4].indexOf(selectedWorkers > 4 ? 4 : selectedWorkers || DEFAULT_WORKERS)}
-                        />
-                    </Box>
-                </Box>
-            )}
-
             {/* Checkpoint Selection */}
             {step === 'checkpoint' && (
                 <Box flexDirection="column">
@@ -505,7 +478,6 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                                 { label: '🧠 Change Backend', value: 'backend' },
                                 { label: '💾 Change Format', value: 'format' },
                                 { label: '🎚️  Change Quality', value: 'quality' },
-                                { label: '🔨 Change Workers', value: 'workers' },
                                 { label: '💾 Toggle Checkpointing', value: 'checkpoint' },
                                 ...(selectedBackend !== 'mlx' ? [{ label: '🍎 Toggle GPU Acceleration', value: 'gpu' }] : []),
                                 { label: '📁 Change Output Directory', value: 'output' },

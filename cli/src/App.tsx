@@ -4,21 +4,21 @@ import { Header } from './components/Header.js';
 import { FileSelector } from './components/FileSelector.js';
 import { ConfigPanel } from './components/ConfigPanel.js';
 import { MetadataEditor, type BookMetadata } from './components/MetadataEditor.js';
-import { ResumeDialog, type CheckpointInfo } from './components/ResumeDialog.js';
+import { BatchReview } from './components/BatchReview.js';
 import { BatchProgress } from './components/BatchProgress.js';
 import { WelcomeScreen } from './components/WelcomeScreen.js';
 import { SetupRequired } from './components/SetupRequired.js';
 import { KeyboardHint, DONE_HINTS, PROCESSING_HINTS } from './components/KeyboardHint.js';
-import type { FileJob, TTSConfig } from './types/profile.js';
+import type { BatchPlan, FileJob, TTSConfig } from './types/profile.js';
 import { runPreflightChecks, quickCheck, type PreflightCheck } from './utils/preflight.js';
 import { extractMetadata } from './utils/metadata.js';
-import { checkCheckpoint, deleteCheckpoint } from './utils/checkpoint.js';
+import { planBatchJobs, type BatchPlanningProgress } from './utils/batch-planner.js';
 import { formatBytes, formatDuration } from './utils/format.js';
 import { openFolder } from './utils/open-folder.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
-export type Screen = 'checking' | 'setup-required' | 'welcome' | 'files' | 'config' | 'metadata' | 'resume' | 'processing' | 'done';
+export type Screen = 'checking' | 'setup-required' | 'welcome' | 'files' | 'config' | 'metadata' | 'planning' | 'review' | 'processing' | 'done';
 
 // Optimal chunk sizes per backend based on benchmarks
 // MLX: 900 chars = 180 chars/s (+11% vs 1200)
@@ -40,7 +40,7 @@ const defaultConfig: TTSConfig = {
     chunkChars: BACKEND_CHUNK_CHARS.auto,
     useMPS: true, // Enable Apple Silicon GPU acceleration by default
     outputDir: null,
-    workers: 2, // Use 2 parallel workers by default (optimal for Apple Silicon MPS)
+    workers: 1, // Execution remains sequential; keep the compatibility flag at 1.
     backend: 'auto', // Default to auto backend selection
     outputFormat: 'mp3', // Default to MP3 format
     bitrate: '192k', // Default to 192k bitrate
@@ -58,8 +58,9 @@ export function App() {
     const [startTime, setStartTime] = useState<number>(0);
     const [bookMetadata, setBookMetadata] = useState<BookMetadata | null>(null);
     const [metadataLoading, setMetadataLoading] = useState(false);
-    const [checkpointInfo, setCheckpointInfo] = useState<CheckpointInfo | null>(null);
-    const [shouldResume, setShouldResume] = useState(false);
+    const [batchPlan, setBatchPlan] = useState<BatchPlan | null>(null);
+    const [planningProgress, setPlanningProgress] = useState<BatchPlanningProgress | null>(null);
+    const [planningError, setPlanningError] = useState<string | null>(null);
 
     // Run preflight checks on startup
     useEffect(() => {
@@ -87,21 +88,30 @@ export function App() {
         setScreen('checking');
     };
 
+    const outputDirectories = Array.from(
+        new Set(
+            files
+                .filter((file) => file.status === 'done')
+                .map((file) => path.dirname(file.outputPath)),
+        ),
+    );
+    const doneHints = outputDirectories.length === 1
+        ? DONE_HINTS
+        : DONE_HINTS.filter((hint) => hint.key !== 'o');
+
     useInput((input, key) => {
         if (input === 'q' || (key.ctrl && input === 'c')) {
             exit();
         }
         // Open output folder in Finder when pressing 'o' on done screen
-        if (screen === 'done' && input === 'o') {
-            const completedFiles = files.filter(f => f.status === 'done');
-            if (completedFiles.length > 0) {
-                const outputDir = path.dirname(completedFiles[0].outputPath);
-                openFolder(outputDir);
-            }
+        if (screen === 'done' && input === 'o' && outputDirectories.length === 1) {
+            openFolder(outputDirectories[0]);
         }
         // Start new batch when pressing 'n' on done screen
         if (screen === 'done' && input === 'n') {
             setFiles([]);
+            setBatchPlan(null);
+            setPlanningError(null);
             setScreen('files');
         }
     });
@@ -119,23 +129,84 @@ export function App() {
         setScreen('config');
     };
 
-    const handleConfigConfirm = async (newConfig: TTSConfig) => {
-        const ext = newConfig.outputFormat === 'm4b' ? '.m4b' : '.mp3';
-        // Update output paths based on format and custom directory
-        setFiles(prev => prev.map(file => {
+    const buildFilesForConfig = (sourceFiles: FileJob[], nextConfig: TTSConfig): FileJob[] => {
+        const ext = nextConfig.outputFormat === 'm4b' ? '.m4b' : '.mp3';
+        return sourceFiles.map((file, index) => {
             const baseName = path.basename(file.inputPath).replace(/\.epub$/i, ext);
-            const outputPath = newConfig.outputDir
-                ? path.join(newConfig.outputDir, baseName)
+            const outputPath = nextConfig.outputDir
+                ? path.join(nextConfig.outputDir, baseName)
                 : file.inputPath.replace(/\.epub$/i, ext);
-            return { ...file, outputPath };
-        }));
-        setConfig(newConfig);
+            return {
+                ...file,
+                id: `job-${index}`,
+                outputPath,
+                status: 'pending',
+                progress: 0,
+                error: undefined,
+            };
+        });
+    };
+
+    const normalizeBatchConfig = (nextConfig: TTSConfig, fileCount: number): TTSConfig => {
+        const normalizedConfig: TTSConfig = {
+            ...nextConfig,
+            workers: 1,
+        };
+
+        if (fileCount !== 1 || normalizedConfig.outputFormat !== 'm4b') {
+            delete normalizedConfig.metadataTitle;
+            delete normalizedConfig.metadataAuthor;
+            delete normalizedConfig.metadataCover;
+        }
+
+        return normalizedConfig;
+    };
+
+    const beginBatchPlanning = async (plannedFiles: FileJob[], nextConfig: TTSConfig) => {
+        setPlanningError(null);
+        setPlanningProgress({
+            current: 0,
+            total: plannedFiles.length,
+            inputPath: '',
+        });
+        setScreen('planning');
+
+        try {
+            const plan = await planBatchJobs(
+                plannedFiles.map((file) => file.inputPath),
+                nextConfig,
+                (progress) => setPlanningProgress(progress),
+            );
+            setBatchPlan(plan);
+            setFiles(plan.jobs.map((job) => ({
+                id: job.id,
+                inputPath: job.inputPath,
+                outputPath: job.outputPath,
+                status: job.errors.length > 0 || job.blocked ? 'skipped' : 'ready',
+                progress: 0,
+                totalChars: job.estimate.totalChars,
+                totalChunks: job.estimate.totalChunks,
+                error: job.errors[0],
+            })));
+            setScreen('review');
+        } catch (error) {
+            setPlanningError(error instanceof Error ? error.message : 'Failed to plan batch');
+            setScreen('config');
+        }
+    };
+
+    const handleConfigConfirm = async (newConfig: TTSConfig) => {
+        const normalizedConfig = normalizeBatchConfig(newConfig, files.length);
+        const plannedFiles = buildFilesForConfig(files, normalizedConfig);
+        setFiles(plannedFiles);
+        setConfig(normalizedConfig);
+        setBatchPlan(null);
 
         // For M4B format, show metadata editor before processing
-        if (newConfig.outputFormat === 'm4b' && files.length > 0) {
+        if (normalizedConfig.outputFormat === 'm4b' && plannedFiles.length === 1) {
             setMetadataLoading(true);
             try {
-                const metadata = await extractMetadata(files[0].inputPath);
+                const metadata = await extractMetadata(plannedFiles[0].inputPath);
                 setBookMetadata({
                     title: metadata.title,
                     author: metadata.author,
@@ -154,59 +225,52 @@ export function App() {
                 setScreen('metadata');
             }
         } else {
-            // For non-M4B, skip metadata screen but still check for checkpoint
-            await checkForCheckpointAndProceed();
+            await beginBatchPlanning(plannedFiles, normalizedConfig);
         }
     };
 
     const handleMetadataConfirm = async (metadata: BookMetadata) => {
-        // Update config with metadata overrides
-        setConfig(prev => ({
-            ...prev,
+        const nextConfig = {
+            ...config,
             metadataTitle: metadata.title,
             metadataAuthor: metadata.author,
             metadataCover: metadata.coverPath,
-        }));
-        // Check for checkpoint before processing
-        await checkForCheckpointAndProceed();
+        };
+        setConfig(nextConfig);
+        await beginBatchPlanning(files, nextConfig);
     };
 
-    const checkForCheckpointAndProceed = async () => {
-        if (files.length > 0) {
-            try {
-                const status = await checkCheckpoint(files[0].inputPath, files[0].outputPath);
-                if (status.exists && status.valid && status.totalChunks && status.completedChunks) {
-                    // Found valid checkpoint - ask user what to do
-                    setCheckpointInfo({
-                        totalChunks: status.totalChunks,
-                        completedChunks: status.completedChunks,
-                    });
-                    setScreen('resume');
-                    return;
-                }
-            } catch {
-                // Checkpoint check failed, proceed without resume
-            }
-        }
-        // No valid checkpoint, start fresh
-        setShouldResume(false);
+    const handleStartProcessing = () => {
         setStartTime(Date.now());
         setScreen('processing');
     };
 
-    const handleResumeChoice = async (resume: boolean) => {
-        if (resume) {
-            setShouldResume(true);
-            setConfig(prev => ({ ...prev, resume: true, checkpointEnabled: true }));
-        } else {
-            // User chose to start fresh - delete checkpoint
-            setShouldResume(false);
-            if (files.length > 0) {
-                await deleteCheckpoint(files[0].outputPath);
-            }
+    const handleStartFreshAll = () => {
+        if (!batchPlan) {
+            return;
         }
-        setStartTime(Date.now());
-        setScreen('processing');
+        const updatedJobs = batchPlan.jobs.map((job) => {
+            if (job.checkpoint.action !== 'resume') {
+                return job;
+            }
+            return {
+                ...job,
+                config: {
+                    ...job.config,
+                    resume: false,
+                    checkpointEnabled: config.checkpointEnabled,
+                },
+                checkpoint: {
+                    ...job.checkpoint,
+                    action: job.checkpoint.exists ? 'start-fresh' as const : 'ignore' as const,
+                },
+            };
+        });
+        setBatchPlan({
+            ...batchPlan,
+            jobs: updatedJobs,
+            resumableJobs: 0,
+        });
     };
 
     const handleProcessingComplete = () => {
@@ -224,6 +288,7 @@ export function App() {
 
     const completedFiles = files.filter(f => f.status === 'done');
     const errorFiles = files.filter(f => f.status === 'error');
+    const skippedFiles = files.filter(f => f.status === 'skipped');
     const totalOutputSize = completedFiles.reduce((acc, f) => acc + (f.outputSize || 0), 0);
     const totalCharsProcessed = completedFiles.reduce((acc, f) => acc + (f.totalChars || 0), 0);
     const totalChunksProcessed = completedFiles.reduce((acc, f) => acc + (f.totalChunks || 0), 0);
@@ -233,6 +298,11 @@ export function App() {
     const processingSpeed = totalTime > 0 && totalCharsProcessed > 0
         ? Math.round(totalCharsProcessed / (totalTime / 1000))
         : 0;
+    const doneHeader = errorFiles.length === 0 && skippedFiles.length === 0
+        ? { title: '✨ Batch complete!', detail: 'All planned audiobooks finished successfully.' }
+        : completedFiles.length > 0
+            ? { title: '⚠ Batch finished with issues', detail: 'Some files completed, but not every job finished cleanly.' }
+            : { title: '✘ Batch failed', detail: 'No output files were produced from this run.' };
 
     return (
         <Box flexDirection="column" padding={1}>
@@ -257,12 +327,19 @@ export function App() {
             )}
 
             {screen === 'config' && (
-                <ConfigPanel
-                    files={files}
-                    config={config}
-                    onConfirm={handleConfigConfirm}
-                    onBack={() => setScreen('files')}
-                />
+                <Box flexDirection="column">
+                    {planningError && (
+                        <Box marginBottom={1} paddingX={2}>
+                            <Text color="red">{planningError}</Text>
+                        </Box>
+                    )}
+                    <ConfigPanel
+                        files={files}
+                        config={config}
+                        onConfirm={handleConfigConfirm}
+                        onBack={() => setScreen('files')}
+                    />
+                </Box>
             )}
 
             {screen === 'metadata' && (
@@ -279,11 +356,27 @@ export function App() {
                 ) : null
             )}
 
-            {screen === 'resume' && checkpointInfo && (
-                <ResumeDialog
-                    checkpoint={checkpointInfo}
-                    onResume={() => handleResumeChoice(true)}
-                    onStartFresh={() => handleResumeChoice(false)}
+            {screen === 'planning' && (
+                <Box marginTop={1} paddingX={2} flexDirection="column">
+                    <Text dimColor>Inspecting files and checkpoints before processing...</Text>
+                    {planningProgress && (
+                        <Text dimColor>
+                            {planningProgress.current}/{planningProgress.total}
+                            {planningProgress.inputPath ? ` • ${planningProgress.inputPath}` : ''}
+                        </Text>
+                    )}
+                    {planningError && (
+                        <Text color="red">{planningError}</Text>
+                    )}
+                </Box>
+            )}
+
+            {screen === 'review' && batchPlan && (
+                <BatchReview
+                    plan={batchPlan}
+                    onStart={handleStartProcessing}
+                    onStartFreshAll={handleStartFreshAll}
+                    onBack={() => setScreen('config')}
                 />
             )}
 
@@ -291,7 +384,7 @@ export function App() {
                 <BatchProgress
                     files={files}
                     setFiles={setFiles}
-                    config={config}
+                    jobPlans={batchPlan?.jobs ?? []}
                     onComplete={handleProcessingComplete}
                 />
             )}
@@ -300,8 +393,10 @@ export function App() {
                 <Box flexDirection="column" marginTop={1}>
                     {/* Success Header */}
                     <Box marginBottom={1}>
-                        <Text color="green" bold>✨ All done!</Text>
-                        <Text> Your audiobooks are ready.</Text>
+                        <Text color={errorFiles.length > 0 || skippedFiles.length > 0 ? 'yellow' : 'green'} bold>
+                            {doneHeader.title}
+                        </Text>
+                        <Text> {doneHeader.detail}</Text>
                     </Box>
 
                     {/* Summary Stats Card */}
@@ -320,6 +415,9 @@ export function App() {
                                 <Text color="green" bold>{completedFiles.length}</Text>
                                 {errorFiles.length > 0 && (
                                     <Text color="red"> ({errorFiles.length} failed)</Text>
+                                )}
+                                {skippedFiles.length > 0 && (
+                                    <Text color="yellow"> ({skippedFiles.length} skipped)</Text>
                                 )}
                             </Box>
                             <Box>
@@ -384,10 +482,12 @@ export function App() {
                                 </Box>
                             ))}
                         </Box>
-                        {completedFiles.length > 0 && (
-                            <Box marginTop={1}>
-                                <Text dimColor>Output directory: </Text>
-                                <Text color="cyan">{path.dirname(completedFiles[0].outputPath)}</Text>
+                        {outputDirectories.length > 0 && (
+                            <Box marginTop={1} flexDirection="column">
+                                <Text dimColor>Output {outputDirectories.length === 1 ? 'directory' : 'directories'}:</Text>
+                                {outputDirectories.map((directory) => (
+                                    <Text key={directory} color="cyan">{directory}</Text>
+                                ))}
                             </Box>
                         )}
                     </Box>
@@ -421,10 +521,38 @@ export function App() {
                         </Box>
                     )}
 
+                    {skippedFiles.length > 0 && (
+                        <Box
+                            flexDirection="column"
+                            borderStyle="round"
+                            borderColor="yellow"
+                            paddingX={2}
+                            paddingY={1}
+                            marginBottom={1}
+                        >
+                            <Text bold color="yellow">↷ Skipped Files</Text>
+                            <Box marginTop={1} flexDirection="column">
+                                {skippedFiles.map(file => (
+                                    <Box key={file.id} flexDirection="column" marginBottom={1}>
+                                        <Box>
+                                            <Text color="yellow">↷ </Text>
+                                            <Text color="white">{path.basename(file.inputPath)}</Text>
+                                        </Box>
+                                        {file.error && (
+                                            <Box marginLeft={2}>
+                                                <Text dimColor color="yellow">{file.error}</Text>
+                                            </Box>
+                                        )}
+                                    </Box>
+                                ))}
+                            </Box>
+                        </Box>
+                    )}
+
                     {/* Actions */}
                     <Box marginTop={1}>
                         <Text dimColor>⌨️  </Text>
-                        <KeyboardHint hints={DONE_HINTS} compact={true} />
+                        <KeyboardHint hints={doneHints} compact={true} />
                     </Box>
                 </Box>
             )}

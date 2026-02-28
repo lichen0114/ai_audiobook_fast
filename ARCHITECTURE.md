@@ -78,15 +78,16 @@ Primary responsibilities:
 2. `setup-required` or `welcome`
 3. `files`
 4. `config`
-5. `metadata` (only for `m4b`)
-6. `resume` (only when a valid checkpoint is detected)
-7. `processing`
-8. `done`
+5. `metadata` (single-file `m4b` only)
+6. `planning`
+7. `review`
+8. `processing`
+9. `done`
 
 Important current behavior:
-- The CLI extracts EPUB metadata before M4B processing and lets the user override title/author/cover.
-- The CLI checks for a checkpoint before processing and prompts the user to resume or delete it.
-- The checkpoint pre-check currently probes the first file in the batch before starting processing.
+- The CLI now inspects every selected file before execution.
+- Planning resolves output paths, extracts metadata, computes chunk/work estimates, and validates checkpoint compatibility per file.
+- The review screen shows resumable jobs, output collisions, warnings, and per-file metadata before processing begins.
 - The CLI always starts backend runs with `--event_format json` and `--log_file <path>`.
 
 ## Backend Pipeline
@@ -103,6 +104,7 @@ Important current behavior:
 Early-exit modes:
 - `--extract_metadata`: parse EPUB metadata and print metadata events, then exit
 - `--check_checkpoint`: report checkpoint status for an input/output pair, then exit
+- `--inspect_job`: emit metadata, chunk/work estimates, and full checkpoint compatibility for one input/output pair, then exit
 
 ### 2. Backend Resolution
 
@@ -118,10 +120,7 @@ Resolved backend is emitted as metadata (`backend_resolved`).
 `default_pipeline_mode(output_format, use_checkpoint)` picks the runtime pipeline.
 
 Default behavior:
-- `overlap3` on Apple Silicon macOS when:
-  - output format is `mp3`
-  - checkpointing is not in use
-- `sequential` otherwise
+- `sequential` for all current default paths
 
 If `--pipeline_mode overlap3` is requested for an unsupported combination (currently non-MP3 or any checkpoint-enabled run), the backend emits a warning and falls back to `sequential`.
 
@@ -153,6 +152,7 @@ If checkpointing is active (`--checkpoint` or `--resume`):
 - resume validation checks:
   - EPUB SHA-256 hash
   - key config values (voice, speed, lang, backend, chunking/split, format, bitrate, normalize)
+  - chunk count match for the current chunking pass
 
 If valid resume data exists, completed chunks can be reused.
 

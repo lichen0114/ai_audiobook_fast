@@ -32,6 +32,7 @@ def build_main_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "resume": False,
         "check_checkpoint": False,
         "extract_metadata": False,
+        "inspect_job": False,
         "event_format": "text",
         "log_file": None,
         "no_checkpoint": False,
@@ -198,6 +199,73 @@ class TestEventEmitter:
         assert info["type"] == "log"
         assert info["level"] == "info"
         assert info["message"] == "hello"
+
+    def test_text_event_emitter_emits_inspection_payload(self, capsys):
+        emitter = app.EventEmitter(event_format="text", job_id="job-99")
+
+        emitter.emit("inspection", result={"output_path": "book.mp3", "total_chunks": 4})
+
+        captured = capsys.readouterr()
+        assert 'INSPECTION:{"output_path": "book.mp3", "total_chunks": 4}' in captured.out
+
+
+@pytest.mark.unit
+class TestInspectionMode:
+    def test_inspect_job_reports_metadata_and_checkpoint_compatibility(self, monkeypatch, tmp_path):
+        args = build_main_args(
+            tmp_path,
+            inspect_job=True,
+            checkpoint=True,
+            pipeline_mode="overlap3",
+            format="m4b",
+        )
+
+        parsed_epub = app.ParsedEpub(
+            metadata=app.BookMetadata(
+                title="Sample Title",
+                author="Sample Author",
+                cover_image=b"cover",
+                cover_mime_type="image/jpeg",
+            ),
+            chapters=[("Chapter 1", "Hello world")],
+        )
+
+        monkeypatch.setattr(app, "parse_epub", lambda *_args, **_kwargs: parsed_epub)
+        monkeypatch.setattr(
+            app,
+            "split_text_to_chunks",
+            lambda chapters, chunk_chars: ([app.TextChunk("Chapter 1", "Hello world")], [(0, "Chapter 1")]),
+        )
+        monkeypatch.setattr(
+            app,
+            "inspect_checkpoint",
+            lambda *_args, **_kwargs: app.CheckpointInspection(
+                exists=True,
+                resume_compatible=True,
+                total_chunks=1,
+                completed_chunks=1,
+                missing_audio_chunks=[],
+            ),
+        )
+
+        inspection = app.inspect_job(args)
+
+        assert inspection.resolved_backend == "mock"
+        assert inspection.resolved_chunk_chars == 120
+        assert inspection.total_chars == len("Hello world")
+        assert inspection.total_chunks == 1
+        assert inspection.chapter_count == 1
+        assert inspection.epub_metadata == {
+            "title": "Sample Title",
+            "author": "Sample Author",
+            "has_cover": True,
+        }
+        assert inspection.checkpoint["resume_compatible"] is True
+        assert inspection.checkpoint["completed_chunks"] == 1
+        assert inspection.resolved_pipeline_mode == "sequential"
+        assert inspection.warnings == [
+            "--pipeline_mode=overlap3 is currently supported only for MP3 without checkpointing; falling back to sequential."
+        ]
 
 
 @pytest.mark.unit

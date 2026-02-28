@@ -40,6 +40,7 @@ from rich.progress import (
 
 from backends import create_backend, TTSBackend
 from checkpoint import (
+    CheckpointInspection,
     CheckpointState,
     compute_epub_hash,
     get_checkpoint_dir,
@@ -48,6 +49,7 @@ from checkpoint import (
     save_chunk_audio,
     load_chunk_audio,
     cleanup_checkpoint,
+    inspect_checkpoint,
     verify_checkpoint,
 )
 
@@ -156,6 +158,9 @@ class EventEmitter:
         if event_type == "done":
             self._write("DONE")
             return
+        if event_type == "inspection":
+            self._write(f"INSPECTION:{json.dumps(payload['result'], ensure_ascii=False)}")
+            return
 
     def emit(self, event_type: str, **payload: Any) -> None:
         if self.event_format == "json":
@@ -245,6 +250,40 @@ class ChapterInfo:
     title: str
     start_sample: int
     end_sample: int
+
+
+@dataclass
+class JobInspectionResult:
+    input_path: str
+    output_path: str
+    resolved_backend: str
+    resolved_chunk_chars: int
+    resolved_pipeline_mode: str
+    output_format: str
+    total_chars: int
+    total_chunks: int
+    chapter_count: int
+    epub_metadata: Dict[str, Any]
+    checkpoint: Dict[str, Any]
+    warnings: List[str]
+    errors: List[str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "input_path": self.input_path,
+            "output_path": self.output_path,
+            "resolved_backend": self.resolved_backend,
+            "resolved_chunk_chars": self.resolved_chunk_chars,
+            "resolved_pipeline_mode": self.resolved_pipeline_mode,
+            "output_format": self.output_format,
+            "total_chars": self.total_chars,
+            "total_chunks": self.total_chunks,
+            "chapter_count": self.chapter_count,
+            "epub_metadata": self.epub_metadata,
+            "checkpoint": self.checkpoint,
+            "warnings": self.warnings,
+            "errors": self.errors,
+        }
 
 
 def _clean_text(text: str) -> str:
@@ -442,6 +481,152 @@ def split_text_to_chunks(
             chunks.append(TextChunk(title, buffer))
 
     return chunks, chapter_start_indices
+
+
+def build_checkpoint_config(
+    args: argparse.Namespace,
+    resolved_backend: str,
+    chunk_chars: int,
+) -> Dict[str, Any]:
+    """Build the checkpoint compatibility config shared by inspect and run modes."""
+    return {
+        "voice": args.voice,
+        "speed": args.speed,
+        "lang_code": args.lang_code,
+        "backend": resolved_backend,
+        "chunk_chars": chunk_chars,
+        "split_pattern": args.split_pattern,
+        "format": args.format,
+        "bitrate": args.bitrate,
+        "normalize": args.normalize,
+    }
+
+
+def resolve_pipeline_mode_for_args(
+    args: argparse.Namespace,
+    use_checkpoint: bool,
+) -> Tuple[str, List[str]]:
+    """Resolve the effective pipeline mode and any compatibility warnings."""
+    warnings: List[str] = []
+    requested_pipeline_mode = args.pipeline_mode or default_pipeline_mode(
+        args.format, use_checkpoint
+    )
+    pipeline_mode = requested_pipeline_mode
+    if pipeline_mode == "overlap3" and (args.format != "mp3" or use_checkpoint):
+        warnings.append(
+            "--pipeline_mode=overlap3 is currently supported only for MP3 "
+            "without checkpointing; falling back to sequential."
+        )
+        pipeline_mode = "sequential"
+    return pipeline_mode, warnings
+
+
+def apply_metadata_overrides(
+    base_metadata: BookMetadata,
+    args: argparse.Namespace,
+) -> BookMetadata:
+    """Apply CLI metadata override flags to extracted EPUB metadata."""
+    book_metadata = base_metadata
+
+    if args.title:
+        book_metadata = BookMetadata(
+            title=args.title,
+            author=book_metadata.author,
+            cover_image=book_metadata.cover_image,
+            cover_mime_type=book_metadata.cover_mime_type,
+        )
+    if args.author:
+        book_metadata = BookMetadata(
+            title=book_metadata.title,
+            author=args.author,
+            cover_image=book_metadata.cover_image,
+            cover_mime_type=book_metadata.cover_mime_type,
+        )
+    if args.cover:
+        cover_path = os.path.abspath(args.cover)
+        if not os.path.exists(cover_path):
+            raise FileNotFoundError(
+                f"Cover override file not found: {cover_path}"
+            )
+        with open(cover_path, "rb") as f:
+            cover_data = f.read()
+        ext = os.path.splitext(cover_path)[1].lower()
+        mime_type = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".gif": "image/gif",
+        }.get(ext, "image/jpeg")
+        book_metadata = BookMetadata(
+            title=book_metadata.title,
+            author=book_metadata.author,
+            cover_image=cover_data,
+            cover_mime_type=mime_type,
+        )
+
+    return book_metadata
+
+
+def inspect_job(args: argparse.Namespace) -> JobInspectionResult:
+    """Inspect a job before execution so the CLI can plan an entire batch."""
+    checkpoint_dir = get_checkpoint_dir(args.output)
+    use_checkpoint = args.checkpoint or args.resume
+    resolved_backend = resolve_backend(args.backend)
+    chunk_chars = (
+        args.chunk_chars
+        if args.chunk_chars is not None
+        else DEFAULT_CHUNK_CHARS.get(resolved_backend, 600)
+    )
+    pipeline_mode, warnings = resolve_pipeline_mode_for_args(args, use_checkpoint)
+
+    parsed_epub = parse_epub(args.input)
+    chapters = parsed_epub.chapters
+    chunks, _chapter_start_indices = split_text_to_chunks(chapters, chunk_chars)
+    total_chars = sum(len(chunk.text) for chunk in chunks)
+
+    if not chunks:
+        raise ValueError("No text chunks produced from EPUB.")
+
+    metadata = apply_metadata_overrides(parsed_epub.metadata, args)
+    checkpoint_status = inspect_checkpoint(
+        checkpoint_dir,
+        args.input,
+        build_checkpoint_config(args, resolved_backend, chunk_chars),
+        expected_total_chunks=len(chunks),
+    )
+
+    if checkpoint_status.missing_audio_chunks:
+        warnings.append(
+            f"Checkpoint is missing {len(checkpoint_status.missing_audio_chunks)} saved chunk audio file(s); "
+            "those chunks will be regenerated."
+        )
+
+    return JobInspectionResult(
+        input_path=args.input,
+        output_path=args.output,
+        resolved_backend=resolved_backend,
+        resolved_chunk_chars=chunk_chars,
+        resolved_pipeline_mode=pipeline_mode,
+        output_format=args.format,
+        total_chars=total_chars,
+        total_chunks=len(chunks),
+        chapter_count=len(chapters),
+        epub_metadata={
+            "title": metadata.title,
+            "author": metadata.author,
+            "has_cover": metadata.cover_image is not None,
+        },
+        checkpoint={
+            "exists": checkpoint_status.exists,
+            "resume_compatible": checkpoint_status.resume_compatible,
+            "total_chunks": checkpoint_status.total_chunks,
+            "completed_chunks": checkpoint_status.completed_chunks,
+            "reason": checkpoint_status.reason,
+            "missing_audio_chunks": checkpoint_status.missing_audio_chunks or [],
+        },
+        warnings=warnings,
+        errors=[],
+    )
 
 
 try:
@@ -1028,6 +1213,11 @@ def parse_args() -> argparse.Namespace:
         help="Extract and print EPUB metadata, then exit",
     )
     parser.add_argument(
+        "--inspect_job",
+        action="store_true",
+        help="Inspect job metadata, chunking, and checkpoint compatibility, then exit",
+    )
+    parser.add_argument(
         "--title",
         help="Override book title in M4B metadata",
     )
@@ -1118,6 +1308,11 @@ def main() -> None:
             )
             return
 
+        if args.inspect_job:
+            inspection = inspect_job(args)
+            events.emit("inspection", result=inspection.to_dict())
+            return
+
         # Checkpoint directory for this output file
         checkpoint_dir = get_checkpoint_dir(args.output)
         use_checkpoint = args.checkpoint or args.resume
@@ -1144,16 +1339,11 @@ def main() -> None:
         resolved_backend = resolve_backend(args.backend)
         events.emit("metadata", key="backend_resolved", value=resolved_backend)
 
-        requested_pipeline_mode = args.pipeline_mode or default_pipeline_mode(
-            args.format, use_checkpoint
+        pipeline_mode, pipeline_warnings = resolve_pipeline_mode_for_args(
+            args, use_checkpoint
         )
-        pipeline_mode = requested_pipeline_mode
-        if pipeline_mode == "overlap3" and (args.format != "mp3" or use_checkpoint):
-            events.warn(
-                "--pipeline_mode=overlap3 is currently supported only for MP3 "
-                "without checkpointing; falling back to sequential."
-            )
-            pipeline_mode = "sequential"
+        for warning in pipeline_warnings:
+            events.warn(warning)
         events.emit("metadata", key="pipeline_mode", value=pipeline_mode)
 
         # Determine chunk size: use user-provided value or backend-optimal default
@@ -1191,44 +1381,7 @@ def main() -> None:
         # Extract book metadata for M4B format
         book_metadata = None
         if args.format == "m4b":
-            book_metadata = parsed_epub.metadata
-
-            # Apply metadata overrides if provided
-            if args.title:
-                book_metadata = BookMetadata(
-                    title=args.title,
-                    author=book_metadata.author,
-                    cover_image=book_metadata.cover_image,
-                    cover_mime_type=book_metadata.cover_mime_type,
-                )
-            if args.author:
-                book_metadata = BookMetadata(
-                    title=book_metadata.title,
-                    author=args.author,
-                    cover_image=book_metadata.cover_image,
-                    cover_mime_type=book_metadata.cover_mime_type,
-                )
-            if args.cover:
-                cover_path = os.path.abspath(args.cover)
-                if not os.path.exists(cover_path):
-                    raise FileNotFoundError(
-                        f"Cover override file not found: {cover_path}"
-                    )
-                with open(cover_path, "rb") as f:
-                    cover_data = f.read()
-                ext = os.path.splitext(cover_path)[1].lower()
-                mime_type = {
-                    ".jpg": "image/jpeg",
-                    ".jpeg": "image/jpeg",
-                    ".png": "image/png",
-                    ".gif": "image/gif",
-                }.get(ext, "image/jpeg")
-                book_metadata = BookMetadata(
-                    title=book_metadata.title,
-                    author=book_metadata.author,
-                    cover_image=cover_data,
-                    cover_mime_type=mime_type,
-                )
+            book_metadata = apply_metadata_overrides(parsed_epub.metadata, args)
 
         # Emit metadata about extracted text
         total_chars = sum(len(chunk.text) for chunk in chunks)
@@ -1246,17 +1399,11 @@ def main() -> None:
 
         if use_checkpoint and args.resume:
             # Verify settings that change either generated waveform or exported output.
-            config_for_verify = {
-                "voice": args.voice,
-                "speed": args.speed,
-                "lang_code": args.lang_code,
-                "backend": resolved_backend,
-                "chunk_chars": chunk_chars,
-                "split_pattern": args.split_pattern,
-                "format": args.format,
-                "bitrate": args.bitrate,
-                "normalize": args.normalize,
-            }
+            config_for_verify = build_checkpoint_config(
+                args,
+                resolved_backend,
+                chunk_chars,
+            )
             if verify_checkpoint(checkpoint_dir, args.input, config_for_verify):
                 state = load_checkpoint(checkpoint_dir)
                 if state and state.total_chunks == total_chunks:
@@ -1312,17 +1459,11 @@ def main() -> None:
             if use_checkpoint:
                 if checkpoint_state is None:
                     epub_hash = compute_epub_hash(args.input)
-                    checkpoint_config = {
-                        "voice": args.voice,
-                        "speed": args.speed,
-                        "lang_code": args.lang_code,
-                        "backend": resolved_backend,
-                        "chunk_chars": chunk_chars,
-                        "split_pattern": args.split_pattern,
-                        "format": args.format,
-                        "bitrate": args.bitrate,
-                        "normalize": args.normalize,
-                    }
+                    checkpoint_config = build_checkpoint_config(
+                        args,
+                        resolved_backend,
+                        chunk_chars,
+                    )
                     checkpoint_state = CheckpointState(
                         epub_hash=epub_hash,
                         config=checkpoint_config,

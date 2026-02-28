@@ -94,9 +94,10 @@ Current interactive flow:
 1. Preflight checks (`ffmpeg`, `.venv`, Python deps, backend script)
 2. File selection (single file, folder, or pattern)
 3. Configuration wizard (accent, voice, speed, backend, format, quality, checkpoint, GPU, output)
-4. M4B metadata editor (only when output format is `m4b`)
-5. Resume dialog (if a valid checkpoint exists)
-6. Batch processing view with live progress and phase updates
+4. M4B metadata editor (single-file `m4b` runs only)
+5. Batch planning pass (metadata, chunk/work estimates, checkpoint compatibility, output collision checks)
+6. Batch review screen with per-file resume/fresh decisions and warnings
+7. Batch processing view with live per-file progress plus weighted batch progress/ETA
 
 ### Direct backend CLI (for scripts/automation)
 
@@ -124,6 +125,10 @@ Common examples:
 # Check checkpoint status only
 .venv/bin/python app.py --check_checkpoint --input book.epub --output book.mp3
 
+# Inspect a job for planning/integration use
+.venv/bin/python app.py --inspect_job --event_format json \
+  --input book.epub --output book.mp3
+
 # Emit JSON events for integrations and write backend logs to a file
 .venv/bin/python app.py --event_format json --log_file ./run.log \
   --input book.epub --output book.mp3
@@ -148,6 +153,7 @@ Common examples:
 | `--checkpoint` | off | Enables checkpoint writes for resume support |
 | `--resume` | off | Attempts to resume from checkpoint (also enables checkpoint mode) |
 | `--check_checkpoint` | off | Reports checkpoint status and exits |
+| `--inspect_job` | off | Emits metadata, chunk/work estimates, and full resume compatibility |
 | `--pipeline_mode` | auto | `sequential` or `overlap3`; `overlap3` is restricted |
 | `--prefetch_chunks` | `2` | `overlap3` tuning |
 | `--pcm_queue_size` | `4` | `overlap3` tuning |
@@ -170,7 +176,7 @@ Common examples:
 - Uses AAC in an `.m4b` container via `ffmpeg`
 - Embeds chapter markers derived from EPUB chapter boundaries
 - Supports metadata from EPUB plus overrides (`--title`, `--author`, `--cover`)
-- Current CLI shows a metadata review/edit screen before M4B processing
+- The CLI keeps metadata overrides isolated per file during planning and execution
 
 More detail: `FORMATS_AND_METADATA.md`
 
@@ -194,6 +200,7 @@ Typical flow:
 Resume is only used when the checkpoint matches:
 - EPUB file hash
 - key generation/export settings (voice, speed, backend, chunking, format, bitrate, normalize, etc.)
+- chunk count for the current chunking pass
 
 More detail: `CHECKPOINTS.md`
 
@@ -217,7 +224,7 @@ British (`--lang_code b`):
 ## Technical Notes
 
 - Runtime export uses `ffmpeg` directly via subprocesses (streaming and file-based paths). The `pydub` dependency remains for compatibility helpers/tests, not the main export path.
-- `--workers` is currently a compatibility setting. The backend warns when it is not `1`, and inference remains sequential.
+- `--workers` is currently a compatibility setting. The backend warns when it is not `1`, and inference remains sequential. The interactive CLI now keeps this pinned to `1`.
 - `--pipeline_mode overlap3` is currently supported only for MP3 output without checkpointing. Incompatible combinations fall back to sequential mode with a warning.
 - `--backend auto` resolves to MLX on Apple Silicon when `mlx-audio` is installed and a runtime probe succeeds; otherwise it falls back to PyTorch.
 
