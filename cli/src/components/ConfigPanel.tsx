@@ -4,20 +4,25 @@ import SelectInput from 'ink-select-input';
 import TextInput from 'ink-text-input';
 import * as path from 'path';
 import type { FileJob, TTSConfig } from '../types/profile.js';
+import {
+    getDefaultAutoChunkChars,
+    getDefaultPytorchChunkChars,
+    isAppleSiliconHost,
+    isLowMemoryAppleHost,
+} from '../utils/apple-host.js';
 
 // Optimal chunk sizes per backend based on benchmarks
 // MLX: 900 chars = 180 chars/s (+11% vs 1200)
 // PyTorch: 600 chars = 98 chars/s (+3% vs 1200)
-const AUTO_CHUNK_CHARS =
-    process.platform === 'darwin' && process.arch === 'arm64' ? 900 : 600;
-const DEFAULT_RECOVERY_MODE =
-    process.platform === 'darwin' && process.arch === 'arm64' ? 'apple-balanced' : 'off';
+const AUTO_CHUNK_CHARS = getDefaultAutoChunkChars();
+const DEFAULT_RECOVERY_MODE = isAppleSiliconHost() ? 'apple-balanced' : 'off';
 const DEFAULT_WORKERS = 1;
+const LOW_MEMORY_APPLE = isLowMemoryAppleHost();
 
 const BACKEND_CHUNK_CHARS: Record<'auto' | 'pytorch' | 'mlx' | 'mock', number> = {
     auto: AUTO_CHUNK_CHARS,
     mlx: 900,
-    pytorch: 600,
+    pytorch: getDefaultPytorchChunkChars(),
     mock: 600,
 };
 
@@ -292,6 +297,11 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                     <Text>
                         📦 Batch mode: <Text color="green">One file at a time</Text>
                     </Text>
+                    {LOW_MEMORY_APPLE && (
+                        <Text>
+                            🍎 Memory profile: <Text color="yellow">8 GB Apple safety mode</Text>
+                        </Text>
+                    )}
                     <Text>
                         💾 Checkpointing: <Text color={step === 'checkpoint' ? 'yellow' : checkpointEnabled ? 'green' : 'gray'}>{checkpointEnabled ? 'Enabled' : 'Disabled'}</Text>
                     </Text>
@@ -348,7 +358,11 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
             {step === 'backend' && (
                 <Box flexDirection="column">
                     <Text color="yellow" bold>Select TTS backend:</Text>
-                    <Text dimColor>Auto starts fast on Apple Silicon and falls back to safer settings after a crash</Text>
+                    <Text dimColor>
+                        {LOW_MEMORY_APPLE
+                            ? 'Auto uses a low-memory Apple profile on 8 GB Macs. Choose MLX only if you want the faster, riskier path.'
+                            : 'Auto starts fast on Apple Silicon and falls back to safer settings after a crash'}
+                    </Text>
                     <Box marginTop={1}>
                         <SelectInput
                             items={backends}
@@ -417,7 +431,11 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
             {step === 'gpu' && (
                 <Box flexDirection="column">
                     <Text color="yellow" bold>Apple Silicon GPU Acceleration (MPS):</Text>
-                    <Text dimColor>Enable for speed on M1/M2/M3 Macs. Disable it if batches become unstable.</Text>
+                    <Text dimColor>
+                        {LOW_MEMORY_APPLE
+                            ? 'Disabled by default on 8 GB Macs for stability. Enable it only if you want to override the CPU-safe profile.'
+                            : 'Enable for speed on M1/M2/M3 Macs. Disable it if batches become unstable.'}
+                    </Text>
                     <Box marginTop={1}>
                         <SelectInput
                             items={[

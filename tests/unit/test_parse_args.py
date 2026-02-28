@@ -40,6 +40,7 @@ class TestParseArgs:
             assert args.pcm_queue_size == 4
             assert args.no_rich is False
             assert args.backend == "auto"
+            assert args.device == "auto"
             assert args.checkpoint is False
             assert args.event_format == "text"
             assert args.log_file is None
@@ -101,6 +102,15 @@ class TestParseArgs:
         ]):
             args = parse_args()
             assert args.backend == "auto"
+
+    def test_custom_device(self):
+        """Should accept explicit device selection."""
+        with patch("sys.argv", [
+            "app.py", "--input", "test.epub", "--output", "test.mp3",
+            "--device", "cpu"
+        ]):
+            args = parse_args()
+            assert args.device == "cpu"
 
     def test_checkpoint_flag(self):
         """Should accept --checkpoint flag."""
@@ -183,6 +193,7 @@ class TestParseArgs:
             "--prefetch_chunks", "5",
             "--pcm_queue_size", "7",
             "--backend", "auto",
+            "--device", "mps",
             "--checkpoint",
             "--event_format", "json",
             "--log_file", "/tmp/run.log",
@@ -202,6 +213,7 @@ class TestParseArgs:
             assert args.prefetch_chunks == 5
             assert args.pcm_queue_size == 7
             assert args.backend == "auto"
+            assert args.device == "mps"
             assert args.checkpoint is True
             assert args.event_format == "json"
             assert args.log_file == "/tmp/run.log"

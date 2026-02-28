@@ -51,6 +51,8 @@ const baseConfig: TTSConfig = {
 
 describe('batch-planner', () => {
     beforeEach(() => {
+        process.env.AUDIOBOOK_FORCE_APPLE_SILICON = '1';
+        process.env.AUDIOBOOK_FORCE_LOW_MEMORY_APPLE = '0';
         vi.mocked(resolvePythonRuntime).mockReturnValue({
             projectRoot: '/tmp/audiobook-fast',
             appPath: '/tmp/audiobook-fast/app.py',
@@ -60,6 +62,8 @@ describe('batch-planner', () => {
     });
 
     afterEach(() => {
+        delete process.env.AUDIOBOOK_FORCE_APPLE_SILICON;
+        delete process.env.AUDIOBOOK_FORCE_LOW_MEMORY_APPLE;
         vi.clearAllMocks();
     });
 
@@ -124,6 +128,8 @@ describe('batch-planner', () => {
 
         const firstArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
         expect(firstArgs.includes('--title')).toBe(false);
+        expect(firstArgs.includes('--device')).toBe(true);
+        expect(firstArgs[firstArgs.indexOf('--device') + 1]).toBe('mps');
     });
 
     it('keeps metadata overrides for a single-file M4B job', async () => {
@@ -166,5 +172,6 @@ describe('batch-planner', () => {
         expect(args.includes('--title')).toBe(true);
         expect(args.includes('--author')).toBe(true);
         expect(args.includes('--cover')).toBe(true);
+        expect(args[args.indexOf('--device') + 1]).toBe('mps');
     });
 });

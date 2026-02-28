@@ -23,7 +23,7 @@ class MockTTSBackend(TTSBackend):
     def sample_rate(self) -> int:
         return 24000
 
-    def initialize(self, lang_code: str = "a") -> None:
+    def initialize(self, lang_code: str = "a", device: str = "auto") -> None:
         self._initialized = True
         self._lang_code = lang_code
 

@@ -16,6 +16,7 @@ class KokoroPyTorchBackend(TTSBackend):
 
     def __init__(self):
         self._pipeline = None
+        self._model = None
         self._sample_rate = 24000
 
     @property
@@ -26,14 +27,38 @@ class KokoroPyTorchBackend(TTSBackend):
     def sample_rate(self) -> int:
         return self._sample_rate
 
-    def initialize(self, lang_code: str = "a") -> None:
+    def initialize(self, lang_code: str = "a", device: str = "auto") -> None:
         """Initialize the Kokoro PyTorch pipeline.
 
         Args:
             lang_code: Language code ('a' for American English, 'b' for British English)
+            device: Requested torch device ('auto', 'cpu', or 'mps')
         """
-        from kokoro import KPipeline
+        from kokoro import KModel, KPipeline
+        import torch
 
+        resolved_device = device
+        if resolved_device == "auto":
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                resolved_device = "mps"
+            else:
+                self._model = None
+                self._pipeline = KPipeline(lang_code=lang_code)
+                return
+
+        if resolved_device == "mps":
+            if not hasattr(torch.backends, "mps") or not torch.backends.mps.is_available():
+                raise RuntimeError("MPS requested but not available")
+            self._model = KModel().to("mps").eval()
+            self._pipeline = KPipeline(lang_code=lang_code, model=self._model)
+            return
+
+        if resolved_device == "cpu":
+            self._model = KModel().to("cpu").eval()
+            self._pipeline = KPipeline(lang_code=lang_code, model=self._model)
+            return
+
+        self._model = None
         self._pipeline = KPipeline(lang_code=lang_code)
 
     def generate(
@@ -66,6 +91,7 @@ class KokoroPyTorchBackend(TTSBackend):
     def cleanup(self) -> None:
         """Release PyTorch resources."""
         self._pipeline = None
+        self._model = None
         # Optionally clear CUDA/MPS cache
         try:
             import torch
@@ -73,7 +99,7 @@ class KokoroPyTorchBackend(TTSBackend):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                # MPS doesn't have explicit cache clearing, but we can hint at it
-                pass
+                if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+                    torch.mps.empty_cache()
         except ImportError:
             pass

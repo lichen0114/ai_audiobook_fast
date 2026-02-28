@@ -25,11 +25,12 @@ class TTSBackend(ABC):
         pass
 
     @abstractmethod
-    def initialize(self, lang_code: str = "a") -> None:
+    def initialize(self, lang_code: str = "a", device: str = "auto") -> None:
         """Initialize the TTS model.
 
         Args:
             lang_code: Language code for the TTS model (default: 'a' for American English)
+            device: Execution device hint for backends that support it
         """
         pass
 

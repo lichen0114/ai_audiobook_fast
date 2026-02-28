@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 
 import { resolvePythonRuntime } from './python-runtime.js';
+import { resolvePythonDeviceArg } from './apple-host.js';
 import type {
     BatchJobPlan,
     BatchPlan,
@@ -114,6 +115,7 @@ function buildInspectArgs(
         '--chunk_chars', config.chunkChars.toString(),
         '--workers', String(config.workers || 1),
         '--backend', config.backend || 'auto',
+        '--device', resolvePythonDeviceArg(config),
         '--format', config.outputFormat || 'mp3',
         '--bitrate', config.bitrate || '192k',
         ...(config.normalize ? ['--normalize'] : []),

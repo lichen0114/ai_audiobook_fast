@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type { PipelineModeOption, RecoveryMode, TTSConfig } from '../types/profile.js';
 import { resolvePythonRuntime } from './python-runtime.js';
+import { isAppleSiliconHost, isLowMemoryAppleHost, resolvePythonDeviceArg } from './apple-host.js';
 
 export interface WorkerStatus {
     id: number;
@@ -393,19 +394,18 @@ function parsePositiveInt(value: string | undefined): number | undefined {
     return parsed;
 }
 
-function isAppleSiliconHost(): boolean {
-    return process.env.AUDIOBOOK_FORCE_APPLE_SILICON === '1'
-        || (process.platform === 'darwin' && process.arch === 'arm64');
-}
-
 function getDefaultRecoveryMode(): RecoveryMode {
     return isAppleSiliconHost() ? 'apple-balanced' : 'off';
 }
 
 function resolveThreadEnvOverrides(): { ompThreads: string; openBlasThreads: string } {
     const cpuCount = Math.max(1, os.cpus().length || 1);
-    const defaultOmp = Math.min(Math.max(4, Math.floor(cpuCount * 0.5)), 8);
-    const defaultOpenBlas = Math.min(Math.max(1, Math.floor(defaultOmp / 2)), 4);
+    const defaultOmp = isLowMemoryAppleHost()
+        ? 2
+        : Math.min(Math.max(4, Math.floor(cpuCount * 0.5)), 8);
+    const defaultOpenBlas = isLowMemoryAppleHost()
+        ? 1
+        : Math.min(Math.max(1, Math.floor(defaultOmp / 2)), 4);
 
     const ompOverride = parsePositiveInt(process.env.AUDIOBOOK_OMP_THREADS);
     const openBlasOverride = parsePositiveInt(process.env.AUDIOBOOK_OPENBLAS_THREADS);
@@ -460,9 +460,7 @@ function buildRecoveryInfo(config: TTSConfig, attempt: number, reason: string): 
 }
 
 function createAppleSafeFallbackConfig(config: TTSConfig): TTSConfig {
-    const fallbackChunkChars = config.backend === 'pytorch'
-        ? Math.min(config.chunkChars, 400)
-        : Math.min(config.chunkChars, 600);
+    const fallbackChunkChars = Math.min(config.chunkChars, 400);
 
     return {
         ...config,
@@ -566,6 +564,7 @@ function runTTSAttempt(
             '--chunk_chars', config.chunkChars.toString(),
             '--workers', (config.workers || DEFAULT_WORKERS).toString(),
             '--backend', config.backend || 'auto',
+            '--device', resolvePythonDeviceArg(config),
             '--format', config.outputFormat || 'mp3',
             '--bitrate', config.bitrate || '192k',
             ...(config.normalize ? ['--normalize'] : []),
@@ -582,12 +581,18 @@ function runTTSAttempt(
         ];
 
         const { ompThreads, openBlasThreads } = resolveThreadEnvOverrides();
-        const shouldSetPytorchMpsEnv = config.useMPS && config.backend !== 'mlx' && config.backend !== 'mock';
+        const shouldSetPytorchThreadEnv = config.backend !== 'mlx' && config.backend !== 'mock';
+        const shouldSetPytorchMpsEnv = config.useMPS
+            && isAppleSiliconHost()
+            && config.backend !== 'mlx'
+            && config.backend !== 'mock';
+        const threadEnvVars = shouldSetPytorchThreadEnv ? {
+            OMP_NUM_THREADS: ompThreads,
+            OPENBLAS_NUM_THREADS: openBlasThreads,
+        } : {};
         const mpsEnvVars = shouldSetPytorchMpsEnv ? {
             PYTORCH_ENABLE_MPS_FALLBACK: '1',
             PYTORCH_MPS_HIGH_WATERMARK_RATIO: '0.0',
-            OMP_NUM_THREADS: ompThreads,
-            OPENBLAS_NUM_THREADS: openBlasThreads,
         } : {};
 
         const childProc = spawn(pythonPath, args, {
@@ -595,6 +600,7 @@ function runTTSAttempt(
             env: {
                 ...globalThis.process.env,
                 PYTHONUNBUFFERED: '1',
+                ...threadEnvVars,
                 ...mpsEnvVars,
             },
         });

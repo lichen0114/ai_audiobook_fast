@@ -25,6 +25,7 @@ def build_main_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "input": str(input_path),
         "output": str(tmp_path / "output.mp3"),
         "backend": "mock",
+        "device": "auto",
         "pipeline_mode": None,
         "format": "mp3",
         "chunk_chars": 120,
@@ -116,6 +117,7 @@ class TestPipelineModeAndBackendResolution:
     def test_resolve_backend_auto_uses_mlx_when_probe_succeeds(self, monkeypatch):
         monkeypatch.setattr(app.sys, "platform", "darwin")
         monkeypatch.setattr(app.platform, "machine", lambda: "arm64")
+        monkeypatch.setattr(app, "is_low_memory_apple_host", lambda: False)
         monkeypatch.setattr(app.importlib.util, "find_spec", lambda name: object())
         probe = MagicMock(returncode=0)
         run_mock = MagicMock(return_value=probe)
@@ -131,6 +133,7 @@ class TestPipelineModeAndBackendResolution:
     def test_resolve_backend_auto_falls_back_when_mlx_not_installed(self, monkeypatch):
         monkeypatch.setattr(app.sys, "platform", "darwin")
         monkeypatch.setattr(app.platform, "machine", lambda: "arm64")
+        monkeypatch.setattr(app, "is_low_memory_apple_host", lambda: False)
         monkeypatch.setattr(app.importlib.util, "find_spec", lambda name: None)
         run_mock = MagicMock()
         monkeypatch.setattr(app.subprocess, "run", run_mock)
@@ -141,6 +144,7 @@ class TestPipelineModeAndBackendResolution:
     def test_resolve_backend_auto_falls_back_on_probe_timeout(self, monkeypatch):
         monkeypatch.setattr(app.sys, "platform", "darwin")
         monkeypatch.setattr(app.platform, "machine", lambda: "arm64")
+        monkeypatch.setattr(app, "is_low_memory_apple_host", lambda: False)
         monkeypatch.setattr(app.importlib.util, "find_spec", lambda name: object())
 
         def raise_timeout(*args, **kwargs):
@@ -149,6 +153,33 @@ class TestPipelineModeAndBackendResolution:
         monkeypatch.setattr(app.subprocess, "run", raise_timeout)
 
         assert app.resolve_backend("auto") == "pytorch"
+
+    def test_resolve_backend_auto_uses_pytorch_on_low_memory_apple(self, monkeypatch):
+        monkeypatch.setattr(app, "is_apple_silicon_host", lambda: True)
+        monkeypatch.setattr(app, "is_low_memory_apple_host", lambda: True)
+        find_spec = MagicMock()
+        monkeypatch.setattr(app.importlib.util, "find_spec", find_spec)
+
+        assert app.resolve_backend("auto") == "pytorch"
+        find_spec.assert_not_called()
+
+    def test_resolve_device_defaults_to_cpu_on_low_memory_apple(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(app, "is_low_memory_apple_host", lambda: True)
+        args = build_main_args(tmp_path, backend="pytorch", device="auto")
+
+        resolved_device, warnings = app.resolve_device_for_args(args, "pytorch")
+
+        assert resolved_device == "cpu"
+        assert warnings == []
+
+    def test_resolve_device_warns_when_ignored_for_mlx(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(app, "is_low_memory_apple_host", lambda: False)
+        args = build_main_args(tmp_path, backend="mlx", device="cpu")
+
+        resolved_device, warnings = app.resolve_device_for_args(args, "mlx")
+
+        assert resolved_device == "mlx"
+        assert warnings == ["--device=cpu is ignored for MLX backend."]
 
 
 @pytest.mark.unit
@@ -251,6 +282,7 @@ class TestInspectionMode:
         inspection = app.inspect_job(args)
 
         assert inspection.resolved_backend == "mock"
+        assert inspection.resolved_device == "cpu"
         assert inspection.resolved_chunk_chars == 120
         assert inspection.total_chars == len("Hello world")
         assert inspection.total_chunks == 1
@@ -265,6 +297,46 @@ class TestInspectionMode:
         assert inspection.resolved_pipeline_mode == "sequential"
         assert inspection.warnings == [
             "--pipeline_mode=overlap3 is currently supported only for MP3 without checkpointing; falling back to sequential."
+        ]
+
+    def test_inspect_job_uses_low_memory_apple_defaults(self, monkeypatch, tmp_path):
+        args = build_main_args(
+            tmp_path,
+            backend="auto",
+            device="auto",
+            chunk_chars=None,
+        )
+
+        parsed_epub = app.ParsedEpub(
+            metadata=app.BookMetadata(title="Sample Title", author="Sample Author"),
+            chapters=[("Chapter 1", "Hello world")],
+        )
+
+        monkeypatch.setattr(app, "parse_epub", lambda *_args, **_kwargs: parsed_epub)
+        monkeypatch.setattr(
+            app,
+            "split_text_to_chunks",
+            lambda chapters, chunk_chars: ([app.TextChunk("Chapter 1", "Hello world")], [(0, "Chapter 1")]),
+        )
+        monkeypatch.setattr(
+            app,
+            "inspect_checkpoint",
+            lambda *_args, **_kwargs: app.CheckpointInspection(
+                exists=False,
+                resume_compatible=False,
+                missing_audio_chunks=[],
+            ),
+        )
+        monkeypatch.setattr(app, "is_low_memory_apple_host", lambda: True)
+        monkeypatch.setattr(app, "resolve_backend", lambda _: "pytorch")
+
+        inspection = app.inspect_job(args)
+
+        assert inspection.resolved_backend == "pytorch"
+        assert inspection.resolved_device == "cpu"
+        assert inspection.resolved_chunk_chars == 400
+        assert inspection.warnings == [
+            "Low-memory Apple profile detected: auto mode will use PyTorch on CPU with 400-character chunks for stability."
         ]
 
 

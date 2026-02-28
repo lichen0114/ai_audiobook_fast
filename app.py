@@ -55,6 +55,8 @@ from checkpoint import (
 
 
 DEFAULT_SAMPLE_RATE = 24000
+LOW_MEMORY_APPLE_MEMORY_THRESHOLD_BYTES = 8 * 1024 * 1024 * 1024
+LOW_MEMORY_APPLE_PYTORCH_CHUNK_CHARS = 400
 SECTION_BLOCK_TAGS = (
     "p",
     "li",
@@ -83,6 +85,96 @@ DEFAULT_CHUNK_CHARS = {
 }
 
 _AUTO_BACKEND_CACHE: Optional[str] = None
+
+
+def _parse_env_bool(value: Optional[str]) -> Optional[bool]:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def is_apple_silicon_host() -> bool:
+    return sys.platform == "darwin" and platform.machine() == "arm64"
+
+
+def _get_macos_total_memory_bytes() -> Optional[int]:
+    if sys.platform != "darwin":
+        return None
+
+    try:
+        probe = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    if probe.returncode != 0:
+        return None
+
+    try:
+        return int(probe.stdout.strip())
+    except ValueError:
+        return None
+
+
+def is_low_memory_apple_host() -> bool:
+    forced = _parse_env_bool(os.getenv("AUDIOBOOK_FORCE_LOW_MEMORY_APPLE"))
+    if forced is not None:
+        return forced
+
+    if not is_apple_silicon_host():
+        return False
+
+    total_memory = _get_macos_total_memory_bytes()
+    if total_memory is None:
+        return False
+
+    return total_memory <= LOW_MEMORY_APPLE_MEMORY_THRESHOLD_BYTES
+
+
+def default_chunk_chars_for_backend(resolved_backend: str) -> int:
+    if resolved_backend == "pytorch" and is_low_memory_apple_host():
+        return LOW_MEMORY_APPLE_PYTORCH_CHUNK_CHARS
+    return DEFAULT_CHUNK_CHARS.get(resolved_backend, 600)
+
+
+def resolve_device_for_args(
+    args: argparse.Namespace,
+    resolved_backend: str,
+) -> Tuple[str, List[str]]:
+    warnings: List[str] = []
+    requested_device = getattr(args, "device", "auto")
+
+    if resolved_backend == "mlx":
+        if requested_device != "auto":
+            warnings.append(
+                f"--device={requested_device} is ignored for MLX backend."
+            )
+        return "mlx", warnings
+
+    if resolved_backend == "mock":
+        if requested_device != "auto":
+            warnings.append(
+                f"--device={requested_device} is ignored for mock backend."
+            )
+        return "cpu", warnings
+
+    if requested_device == "auto":
+        if is_low_memory_apple_host():
+            return "cpu", warnings
+        if is_apple_silicon_host():
+            return "mps", warnings
+        return "auto", warnings
+
+    return requested_device, warnings
 
 
 def default_pipeline_mode(output_format: str, use_checkpoint: bool) -> str:
@@ -215,7 +307,11 @@ def resolve_backend(backend: str) -> str:
     if _AUTO_BACKEND_CACHE is not None:
         return _AUTO_BACKEND_CACHE
 
-    if sys.platform == "darwin" and platform.machine() == "arm64":
+    if is_apple_silicon_host():
+        if is_low_memory_apple_host():
+            _AUTO_BACKEND_CACHE = "pytorch"
+            return _AUTO_BACKEND_CACHE
+
         if importlib.util.find_spec("mlx_audio") is None:
             _AUTO_BACKEND_CACHE = "pytorch"
             return _AUTO_BACKEND_CACHE
@@ -283,6 +379,7 @@ class JobInspectionResult:
     input_path: str
     output_path: str
     resolved_backend: str
+    resolved_device: str
     resolved_chunk_chars: int
     resolved_pipeline_mode: str
     output_format: str
@@ -299,6 +396,7 @@ class JobInspectionResult:
             "input_path": self.input_path,
             "output_path": self.output_path,
             "resolved_backend": self.resolved_backend,
+            "resolved_device": self.resolved_device,
             "resolved_chunk_chars": self.resolved_chunk_chars,
             "resolved_pipeline_mode": self.resolved_pipeline_mode,
             "output_format": self.output_format,
@@ -722,6 +820,7 @@ def build_checkpoint_config(
     args: argparse.Namespace,
     resolved_backend: str,
     chunk_chars: int,
+    resolved_device: str,
 ) -> Dict[str, Any]:
     """Build the checkpoint compatibility config shared by inspect and run modes."""
     return {
@@ -729,6 +828,7 @@ def build_checkpoint_config(
         "speed": args.speed,
         "lang_code": args.lang_code,
         "backend": resolved_backend,
+        "device": resolved_device if resolved_backend == "pytorch" else "auto",
         "chunk_chars": chunk_chars,
         "split_pattern": args.split_pattern,
         "format": args.format,
@@ -800,12 +900,24 @@ def inspect_job(args: argparse.Namespace) -> JobInspectionResult:
     checkpoint_dir = get_checkpoint_dir(args.output)
     use_checkpoint = args.checkpoint or args.resume
     resolved_backend = resolve_backend(args.backend)
+    resolved_device, device_warnings = resolve_device_for_args(args, resolved_backend)
     chunk_chars = (
         args.chunk_chars
         if args.chunk_chars is not None
-        else DEFAULT_CHUNK_CHARS.get(resolved_backend, 600)
+        else default_chunk_chars_for_backend(resolved_backend)
     )
-    pipeline_mode, warnings = resolve_pipeline_mode_for_args(args, use_checkpoint)
+    pipeline_mode, pipeline_warnings = resolve_pipeline_mode_for_args(args, use_checkpoint)
+    warnings = [*device_warnings, *pipeline_warnings]
+
+    if is_low_memory_apple_host() and args.backend == "auto" and args.device == "auto":
+        warnings.append(
+            "Low-memory Apple profile detected: auto mode will use PyTorch on CPU "
+            f"with {chunk_chars}-character chunks for stability."
+        )
+    if is_low_memory_apple_host() and resolved_backend == "mlx":
+        warnings.append(
+            "MLX can be unstable on 8 GB Apple Silicon when processing multiple books."
+        )
 
     parsed_epub = parse_epub(args.input)
     chapters = parsed_epub.chapters
@@ -819,7 +931,7 @@ def inspect_job(args: argparse.Namespace) -> JobInspectionResult:
     checkpoint_status = inspect_checkpoint(
         checkpoint_dir,
         args.input,
-        build_checkpoint_config(args, resolved_backend, chunk_chars),
+        build_checkpoint_config(args, resolved_backend, chunk_chars, resolved_device),
         expected_total_chunks=len(chunks),
     )
 
@@ -833,6 +945,7 @@ def inspect_job(args: argparse.Namespace) -> JobInspectionResult:
         input_path=args.input,
         output_path=args.output,
         resolved_backend=resolved_backend,
+        resolved_device=resolved_device,
         resolved_chunk_chars=chunk_chars,
         resolved_pipeline_mode=pipeline_mode,
         output_format=args.format,
@@ -1411,10 +1524,7 @@ def parse_args() -> argparse.Namespace:
         "--pipeline_mode",
         choices=["sequential", "overlap3"],
         default=None,
-        help=(
-            "Pipeline execution mode. Defaults to overlap3 on Apple Silicon for MP3 "
-            "without checkpoints, otherwise sequential."
-        ),
+        help="Pipeline execution mode. Defaults to sequential for stability.",
     )
     parser.add_argument(
         "--prefetch_chunks",
@@ -1438,6 +1548,12 @@ def parse_args() -> argparse.Namespace:
         choices=["auto", "pytorch", "mlx", "mock"],
         default="auto",
         help="TTS backend to use (default: auto)",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cpu", "mps"],
+        default="auto",
+        help="Execution device for the PyTorch backend (default: auto)",
     )
     parser.add_argument(
         "--format",
@@ -1587,11 +1703,13 @@ def main() -> None:
 
         resolved_backend = resolve_backend(args.backend)
         events.emit("metadata", key="backend_resolved", value=resolved_backend)
+        resolved_device, device_warnings = resolve_device_for_args(args, resolved_backend)
+        events.emit("metadata", key="device_resolved", value=resolved_device)
 
         pipeline_mode, pipeline_warnings = resolve_pipeline_mode_for_args(
             args, use_checkpoint
         )
-        for warning in pipeline_warnings:
+        for warning in [*device_warnings, *pipeline_warnings]:
             events.warn(warning)
         events.emit("metadata", key="pipeline_mode", value=pipeline_mode)
 
@@ -1599,8 +1717,18 @@ def main() -> None:
         chunk_chars = (
             args.chunk_chars
             if args.chunk_chars is not None
-            else DEFAULT_CHUNK_CHARS.get(resolved_backend, 600)
+            else default_chunk_chars_for_backend(resolved_backend)
         )
+
+        if is_low_memory_apple_host() and args.backend == "auto" and args.device == "auto":
+            events.warn(
+                "Low-memory Apple profile detected: auto mode will use PyTorch on CPU "
+                f"with {chunk_chars}-character chunks for stability."
+            )
+        if is_low_memory_apple_host() and resolved_backend == "mlx":
+            events.warn(
+                "MLX can be unstable on 8 GB Apple Silicon when processing multiple books."
+            )
 
         # Phase: Parsing
         events.emit("phase", phase="PARSING")
@@ -1652,6 +1780,7 @@ def main() -> None:
                 args,
                 resolved_backend,
                 chunk_chars,
+                resolved_device,
             )
             if verify_checkpoint(checkpoint_dir, args.input, config_for_verify):
                 state = load_checkpoint(checkpoint_dir)
@@ -1675,7 +1804,7 @@ def main() -> None:
             # Initialize the TTS backend
             try:
                 backend = create_backend(resolved_backend)
-                backend.initialize(lang_code=args.lang_code)
+                backend.initialize(lang_code=args.lang_code, device=resolved_device)
                 sample_rate = backend.sample_rate
             except ImportError as exc:
                 raise RuntimeError(
@@ -1712,6 +1841,7 @@ def main() -> None:
                         args,
                         resolved_backend,
                         chunk_chars,
+                        resolved_device,
                     )
                     checkpoint_state = CheckpointState(
                         epub_hash=epub_hash,

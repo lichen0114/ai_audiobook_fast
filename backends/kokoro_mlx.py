@@ -27,11 +27,12 @@ class KokoroMLXBackend(TTSBackend):
     def sample_rate(self) -> int:
         return self._sample_rate
 
-    def initialize(self, lang_code: str = "a") -> None:
+    def initialize(self, lang_code: str = "a", device: str = "auto") -> None:
         """Initialize the Kokoro MLX pipeline.
 
         Args:
             lang_code: Language code ('a' for American English, 'b' for British English)
+            device: Ignored for MLX; present for interface compatibility
         """
         try:
             from mlx_audio.tts.models.kokoro import KokoroPipeline

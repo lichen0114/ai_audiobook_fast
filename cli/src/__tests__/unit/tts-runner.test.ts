@@ -74,6 +74,7 @@ const baseConfig: TTSConfig = {
 describe('tts-runner parser and recovery flow', () => {
     beforeEach(() => {
         process.env.AUDIOBOOK_FORCE_APPLE_SILICON = '1';
+        process.env.AUDIOBOOK_FORCE_LOW_MEMORY_APPLE = '0';
         vi.mocked(resolvePythonRuntime).mockReturnValue({
             projectRoot: '/tmp/audiobook-fast',
             appPath: '/tmp/audiobook-fast/app.py',
@@ -84,6 +85,7 @@ describe('tts-runner parser and recovery flow', () => {
 
     afterEach(() => {
         delete process.env.AUDIOBOOK_FORCE_APPLE_SILICON;
+        delete process.env.AUDIOBOOK_FORCE_LOW_MEMORY_APPLE;
         vi.clearAllMocks();
     });
 
@@ -221,12 +223,15 @@ describe('tts-runner parser and recovery flow', () => {
 
         expect(spawn).toHaveBeenCalledTimes(2);
 
+        const firstArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
         const retryArgs = vi.mocked(spawn).mock.calls[1][1] as string[];
         const retryEnv = vi.mocked(spawn).mock.calls[1][2]?.env as Record<string, string> | undefined;
 
+        expect(getArgValue(firstArgs, '--device')).toBe('mps');
         expect(getArgValue(retryArgs, '--backend')).toBe('pytorch');
+        expect(getArgValue(retryArgs, '--device')).toBe('cpu');
         expect(getArgValue(retryArgs, '--workers')).toBe('1');
-        expect(getArgValue(retryArgs, '--chunk_chars')).toBe('600');
+        expect(getArgValue(retryArgs, '--chunk_chars')).toBe('400');
         expect(getArgValue(retryArgs, '--pipeline_mode')).toBe('sequential');
         expect(retryEnv?.PYTORCH_ENABLE_MPS_FALLBACK).toBeUndefined();
 
@@ -236,7 +241,7 @@ describe('tts-runner parser and recovery flow', () => {
             backend: 'pytorch',
             useMPS: false,
             pipelineMode: 'sequential',
-            chunkChars: 600,
+            chunkChars: 400,
             workers: 1,
         });
         expect(updates[updates.length - 1]?.phase).toBe('DONE');
@@ -293,5 +298,26 @@ describe('tts-runner parser and recovery flow', () => {
         expect(args.includes('--title')).toBe(false);
         expect(args.includes('--author')).toBe(false);
         expect(args.includes('--cover')).toBe(false);
+    });
+
+    it('uses reduced thread env and cpu device on low-memory Apple hosts', async () => {
+        process.env.AUDIOBOOK_FORCE_LOW_MEMORY_APPLE = '1';
+
+        vi.mocked(spawn).mockImplementation(() => createMockChildProcess({
+            stdout: ['{"type":"done"}'],
+            code: 0,
+        }) as any);
+
+        await runTTS('book.epub', 'book.mp3', {
+            ...baseConfig,
+            useMPS: false,
+        }, () => undefined);
+
+        const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+        const env = vi.mocked(spawn).mock.calls[0][2]?.env as Record<string, string> | undefined;
+
+        expect(getArgValue(args, '--device')).toBe('cpu');
+        expect(env?.OMP_NUM_THREADS).toBe('2');
+        expect(env?.OPENBLAS_NUM_THREADS).toBe('1');
     });
 });

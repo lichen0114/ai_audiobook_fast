@@ -15,6 +15,7 @@ import { extractMetadata } from './utils/metadata.js';
 import { planBatchJobs, type BatchPlanningProgress } from './utils/batch-planner.js';
 import { formatBytes, formatDuration } from './utils/format.js';
 import { openFolder } from './utils/open-folder.js';
+import { getDefaultAutoChunkChars, getDefaultPytorchChunkChars, getDefaultUseMPS } from './utils/apple-host.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -23,13 +24,12 @@ export type Screen = 'checking' | 'setup-required' | 'welcome' | 'files' | 'conf
 // Optimal chunk sizes per backend based on benchmarks
 // MLX: 900 chars = 180 chars/s (+11% vs 1200)
 // PyTorch: 600 chars = 98 chars/s (+3% vs 1200)
-const AUTO_CHUNK_CHARS =
-    process.platform === 'darwin' && process.arch === 'arm64' ? 900 : 600;
+const AUTO_CHUNK_CHARS = getDefaultAutoChunkChars();
 
 const BACKEND_CHUNK_CHARS: Record<'auto' | 'pytorch' | 'mlx' | 'mock', number> = {
     auto: AUTO_CHUNK_CHARS,
     mlx: 900,
-    pytorch: 600,
+    pytorch: getDefaultPytorchChunkChars(),
     mock: 600,
 };
 
@@ -38,7 +38,7 @@ const defaultConfig: TTSConfig = {
     speed: 1.0,
     langCode: 'a',
     chunkChars: BACKEND_CHUNK_CHARS.auto,
-    useMPS: true, // Enable Apple Silicon GPU acceleration by default
+    useMPS: getDefaultUseMPS(),
     outputDir: null,
     workers: 1, // Execution remains sequential; keep the compatibility flag at 1.
     backend: 'auto', // Default to auto backend selection
