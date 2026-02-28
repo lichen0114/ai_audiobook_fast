@@ -1,16 +1,16 @@
 """Tests for the export_pcm_to_m4b function."""
 
-import pytest
 import sys
 import os
 from pathlib import Path
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from app import export_pcm_to_m4b, BookMetadata, ChapterInfo, DEFAULT_SAMPLE_RATE
+from app import export_pcm_to_m4b, BookMetadata, ChapterInfo
 
 
 @pytest.mark.unit
@@ -110,14 +110,11 @@ class TestExportPcmToM4b:
         )
         chapters = []
 
-        # Track temp files created
-        created_files = []
-        original_write = open
-
         export_pcm_to_m4b(pcm_data, output_path, metadata, chapters)
 
-        # Should have worked (ffmpeg called)
-        assert mock_ffmpeg.called
+        call_args = mock_ffmpeg.call_args
+        cmd = call_args[0][0]
+        assert any(arg.endswith(".png") for arg in cmd)
 
     def test_ffmpeg_not_found_raises(self, temp_dir):
         """Should raise FileNotFoundError if ffmpeg not found."""
@@ -260,3 +257,28 @@ class TestExportPcmToM4b:
         input_bytes = call_args.kwargs.get("input")
         assert input_bytes is not None
         assert len(input_bytes) == pcm_data.nbytes
+
+    def test_empty_input_uses_short_silent_audio_source(self, temp_dir, mock_ffmpeg):
+        """Empty PCM should use a short lavfi silence source instead of a streamless file."""
+        pcm_data = np.array([], dtype=np.int16)
+        output_path = f"{temp_dir}/output.m4b"
+        metadata = BookMetadata(title="Book", author="Author")
+
+        export_pcm_to_m4b(pcm_data, output_path, metadata, [])
+
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert "lavfi" in cmd
+        assert any("anullsrc=r=24000:cl=mono" in arg for arg in cmd)
+        assert "-t" in cmd
+        assert mock_ffmpeg.call_args.kwargs.get("input") == b""
+
+    def test_float_audio_is_scaled_to_int16_before_export(self, temp_dir, mock_ffmpeg):
+        """Float PCM should be scaled with audio_to_int16 semantics before piping to ffmpeg."""
+        pcm_data = np.array([0.5, -0.5], dtype=np.float32)
+        output_path = f"{temp_dir}/output.m4b"
+        metadata = BookMetadata(title="Book", author="Author")
+
+        export_pcm_to_m4b(pcm_data, output_path, metadata, [])
+
+        input_bytes = mock_ffmpeg.call_args.kwargs.get("input")
+        assert input_bytes == np.array([16383, -16383], dtype=np.int16).tobytes()

@@ -96,12 +96,16 @@ def test_mock_backend_m4b_end_to_end_with_ffprobe(tmp_path: Path):
         pytest.skip("ffmpeg/ffprobe not available")
 
     output_path = tmp_path / "mock-e2e.m4b"
+    cover_path = ROOT_DIR / "photo.png"
 
     result = run_app([
         "--input", str(SAMPLE_EPUB),
         "--output", str(output_path),
         "--backend", "mock",
         "--format", "m4b",
+        "--title", "CLI Title",
+        "--author", "CLI Author",
+        "--cover", str(cover_path),
         "--chunk_chars", "120",
         "--checkpoint",
     ])
@@ -119,6 +123,7 @@ def test_mock_backend_m4b_end_to_end_with_ffprobe(tmp_path: Path):
             "quiet",
             "-print_format",
             "json",
+            "-show_streams",
             "-show_chapters",
             "-show_format",
             str(output_path),
@@ -132,6 +137,16 @@ def test_mock_backend_m4b_end_to_end_with_ffprobe(tmp_path: Path):
     probe_data = json.loads(ffprobe.stdout)
     chapters = probe_data.get("chapters", [])
     assert len(chapters) >= 1
+    assert probe_data.get("format", {}).get("tags", {}).get("title") == "CLI Title"
+    assert probe_data.get("format", {}).get("tags", {}).get("artist") == "CLI Author"
+    chapter_titles = [chapter.get("tags", {}).get("title", "") for chapter in chapters]
+    assert all(title for title in chapter_titles)
+    attached_pictures = [
+        stream
+        for stream in probe_data.get("streams", [])
+        if stream.get("disposition", {}).get("attached_pic") == 1
+    ]
+    assert attached_pictures
 
 
 @pytest.mark.e2e

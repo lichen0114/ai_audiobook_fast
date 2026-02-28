@@ -251,4 +251,47 @@ describe('tts-runner parser and recovery flow', () => {
         await expect(runTTS('missing.epub', 'book.mp3', baseConfig, () => undefined)).rejects.toThrow('Input EPUB not found');
         expect(spawn).toHaveBeenCalledTimes(1);
     });
+
+    it('passes M4B metadata flags only when explicit overrides exist', async () => {
+        vi.mocked(spawn).mockImplementation(() => createMockChildProcess({
+            stdout: ['{"type":"done"}'],
+            code: 0,
+        }) as any);
+
+        const config: TTSConfig = {
+            ...baseConfig,
+            outputFormat: 'm4b',
+            metadataTitle: 'Explicit Title',
+            metadataAuthor: 'Explicit Author',
+            metadataCover: '/tmp/cover.png',
+        };
+
+        await runTTS('book.epub', 'book.m4b', config, () => undefined);
+
+        const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+        expect(getArgValue(args, '--format')).toBe('m4b');
+        expect(getArgValue(args, '--title')).toBe('Explicit Title');
+        expect(getArgValue(args, '--author')).toBe('Explicit Author');
+        expect(getArgValue(args, '--cover')).toBe('/tmp/cover.png');
+    });
+
+    it('omits M4B metadata flags when no explicit overrides are present', async () => {
+        vi.mocked(spawn).mockImplementation(() => createMockChildProcess({
+            stdout: ['{"type":"done"}'],
+            code: 0,
+        }) as any);
+
+        await runTTS('book.epub', 'book.m4b', {
+            ...baseConfig,
+            outputFormat: 'm4b',
+            metadataTitle: undefined,
+            metadataAuthor: undefined,
+            metadataCover: undefined,
+        }, () => undefined);
+
+        const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+        expect(args.includes('--title')).toBe(false);
+        expect(args.includes('--author')).toBe(false);
+        expect(args.includes('--cover')).toBe(false);
+    });
 });

@@ -185,9 +185,9 @@ Common examples:
 ### M4B
 
 - Uses AAC audio in an `.m4b` container via `ffmpeg`
-- Embeds chapter markers derived from EPUB chapter boundaries
+- Embeds chapter markers derived from parsed EPUB content documents with sample-accurate offsets
 - Supports EPUB metadata plus overrides from `--title`, `--author`, and `--cover`
-- The interactive CLI exposes the metadata editor only for single-file M4B runs
+- The interactive CLI exposes the metadata editor only for single-file M4B runs, and only explicit edits become overrides
 - Multi-file M4B CLI runs use EPUB metadata and do not expose per-file override editing
 
 See `FORMATS_AND_METADATA.md` for the full behavior matrix and metadata rules.

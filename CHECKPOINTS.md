@@ -85,7 +85,7 @@ The backend stores:
 - `config`: key generation and export settings used for compatibility checks
 - `total_chunks`: number of chunks in the job
 - `completed_chunks`: chunk indexes already saved
-- `chapter_start_indices`: chapter boundary information used for final chapter metadata generation
+- `chapter_start_indices`: chapter boundary information captured for compatibility/debugging and chapter reconstruction checks
 
 ### Chunk audio (`chunk_*.npy`)
 

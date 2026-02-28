@@ -58,6 +58,9 @@ describe('MetadataEditor (interaction)', () => {
             author: 'Author',
             hasCover: false,
             coverPath: undefined,
+            titleOverride: undefined,
+            authorOverride: undefined,
+            warning: undefined,
         });
     });
 
@@ -86,6 +89,9 @@ describe('MetadataEditor (interaction)', () => {
             author: 'Old Author',
             hasCover: true,
             coverPath: '/tmp/cover.png',
+            titleOverride: 'New Title',
+            authorOverride: undefined,
+            warning: undefined,
         });
     });
 
@@ -108,5 +114,29 @@ describe('MetadataEditor (interaction)', () => {
 
         inputHandler('', { escape: true });
         expect(onBack).toHaveBeenCalledOnce();
+    });
+
+    it('clears a custom cover back to the EPUB cover', () => {
+        const onConfirm = vi.fn();
+        render(
+            <MetadataEditor
+                metadata={{ title: 'Book', author: 'Author', hasCover: true, coverPath: '/tmp/custom.png' }}
+                onConfirm={onConfirm}
+                onBack={() => {}}
+            />
+        );
+
+        lastSelectProps.onSelect({ value: 'clear_cover' });
+        lastSelectProps.onSelect({ value: 'continue' });
+
+        expect(onConfirm).toHaveBeenCalledWith({
+            title: 'Book',
+            author: 'Author',
+            hasCover: true,
+            coverPath: undefined,
+            titleOverride: undefined,
+            authorOverride: undefined,
+            warning: undefined,
+        });
     });
 });

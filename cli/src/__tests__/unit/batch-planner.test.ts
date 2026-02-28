@@ -120,9 +120,51 @@ describe('batch-planner', () => {
         expect(plan.jobs[1].blocked).toBe(true);
         expect(plan.blockedJobs).toBe(2);
         expect(plan.jobs[0].errors[0]).toContain('Output path collides');
-        expect(plan.jobs[1].warnings[0]).toContain('Existing checkpoint will be ignored');
+        expect(plan.jobs[1].warnings[0]).toContain('Existing checkpoint will be deleted before starting fresh');
 
         const firstArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
         expect(firstArgs.includes('--title')).toBe(false);
+    });
+
+    it('keeps metadata overrides for a single-file M4B job', async () => {
+        vi.mocked(spawn).mockImplementationOnce(() => emitInspection({
+            input_path: '/books/a/book.epub',
+            output_path: '/tmp/out/book.m4b',
+            resolved_backend: 'mock',
+            resolved_chunk_chars: 900,
+            resolved_pipeline_mode: 'sequential',
+            output_format: 'm4b',
+            total_chars: 1000,
+            total_chunks: 5,
+            chapter_count: 3,
+            epub_metadata: { title: 'Book A', author: 'Author A', has_cover: true },
+            checkpoint: {
+                exists: false,
+                resume_compatible: false,
+                missing_audio_chunks: [],
+            },
+            warnings: [],
+            errors: [],
+        }) as any);
+
+        const plan = await planBatchJobs(
+            ['/books/a/book.epub'],
+            {
+                ...baseConfig,
+                outputFormat: 'm4b',
+                metadataTitle: 'Explicit Title',
+                metadataAuthor: 'Explicit Author',
+                metadataCover: '/tmp/cover.png',
+            },
+        );
+
+        expect(plan.jobs[0].config.metadataTitle).toBe('Explicit Title');
+        expect(plan.jobs[0].config.metadataAuthor).toBe('Explicit Author');
+        expect(plan.jobs[0].config.metadataCover).toBe('/tmp/cover.png');
+
+        const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+        expect(args.includes('--title')).toBe(true);
+        expect(args.includes('--author')).toBe(true);
+        expect(args.includes('--cover')).toBe(true);
     });
 });

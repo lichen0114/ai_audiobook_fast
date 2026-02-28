@@ -208,18 +208,19 @@ export function App() {
             try {
                 const metadata = await extractMetadata(plannedFiles[0].inputPath);
                 setBookMetadata({
-                    title: metadata.title,
-                    author: metadata.author,
+                    title: metadata.title ?? '',
+                    author: metadata.author ?? '',
                     hasCover: metadata.hasCover,
+                    warning: undefined,
                 });
                 setMetadataLoading(false);
                 setScreen('metadata');
             } catch {
-                // If metadata extraction fails, proceed with defaults
                 setBookMetadata({
-                    title: 'Unknown Title',
-                    author: 'Unknown Author',
+                    title: '',
+                    author: '',
                     hasCover: false,
+                    warning: 'Metadata extraction failed. Leave fields blank to keep the EPUB metadata untouched, or enter explicit overrides.',
                 });
                 setMetadataLoading(false);
                 setScreen('metadata');
@@ -230,12 +231,31 @@ export function App() {
     };
 
     const handleMetadataConfirm = async (metadata: BookMetadata) => {
-        const nextConfig = {
+        const resolvedCoverPath = metadata.coverPath
+            ? path.resolve(process.cwd(), metadata.coverPath)
+            : undefined;
+        const nextConfig: TTSConfig = {
             ...config,
-            metadataTitle: metadata.title,
-            metadataAuthor: metadata.author,
-            metadataCover: metadata.coverPath,
         };
+
+        if (metadata.titleOverride) {
+            nextConfig.metadataTitle = metadata.titleOverride;
+        } else {
+            delete nextConfig.metadataTitle;
+        }
+
+        if (metadata.authorOverride) {
+            nextConfig.metadataAuthor = metadata.authorOverride;
+        } else {
+            delete nextConfig.metadataAuthor;
+        }
+
+        if (resolvedCoverPath) {
+            nextConfig.metadataCover = resolvedCoverPath;
+        } else {
+            delete nextConfig.metadataCover;
+        }
+
         setConfig(nextConfig);
         await beginBatchPlanning(files, nextConfig);
     };

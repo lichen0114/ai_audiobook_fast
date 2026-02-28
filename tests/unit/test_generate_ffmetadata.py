@@ -75,9 +75,9 @@ class TestGenerateFfmetadata:
         result = generate_ffmetadata(metadata, chapters, sample_rate=24000)
 
         assert "[CHAPTER]" in result
-        assert "TIMEBASE=1/1000" in result
+        assert "TIMEBASE=1/24000" in result
         assert "START=0" in result
-        assert "END=1000" in result  # 24000 samples / 24000 rate * 1000 = 1000ms
+        assert "END=24000" in result
         assert "title=Chapter 1" in result
 
     def test_multiple_chapters(self):
@@ -98,9 +98,8 @@ class TestGenerateFfmetadata:
         assert "title=Chapter 3" in result
 
     def test_chapter_timing_conversion(self):
-        """Chapter times should be converted from samples to milliseconds."""
+        """Chapter times should preserve raw sample offsets."""
         metadata = BookMetadata(title="Book", author="Author")
-        # 48000 samples at 24000 Hz = 2 seconds = 2000 ms
         chapters = [
             ChapterInfo(title="Ch", start_sample=0, end_sample=48000)
         ]
@@ -108,7 +107,7 @@ class TestGenerateFfmetadata:
         result = generate_ffmetadata(metadata, chapters, sample_rate=24000)
 
         assert "START=0" in result
-        assert "END=2000" in result
+        assert "END=48000" in result
 
     def test_special_chars_in_title_escaped(self):
         """Special characters in chapter titles should be escaped."""
@@ -136,16 +135,16 @@ class TestGenerateFfmetadata:
         assert "artist=Author\\\\Name" in result
 
     def test_custom_sample_rate(self):
-        """Custom sample rate should affect timing calculations."""
+        """Custom sample rate should change the chapter timebase."""
         metadata = BookMetadata(title="Book", author="Author")
-        # 48000 samples at 48000 Hz = 1 second = 1000 ms
         chapters = [
             ChapterInfo(title="Ch", start_sample=0, end_sample=48000)
         ]
 
         result = generate_ffmetadata(metadata, chapters, sample_rate=48000)
 
-        assert "END=1000" in result
+        assert "TIMEBASE=1/48000" in result
+        assert "END=48000" in result
 
     def test_empty_chapters_list(self):
         """Empty chapters list should produce metadata without chapters."""

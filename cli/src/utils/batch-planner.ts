@@ -228,7 +228,7 @@ export async function planBatchJobs(
 
             if (inspection.checkpoint.exists && checkpointAction === 'start-fresh') {
                 warnings.push(
-                    `Existing checkpoint will be ignored (${inspection.checkpoint.reason ?? 'not resumable'}).`,
+                    `Existing checkpoint will be deleted before starting fresh (${inspection.checkpoint.reason ?? 'not resumable'}).`,
                 );
             }
 

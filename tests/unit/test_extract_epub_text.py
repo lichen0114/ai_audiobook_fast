@@ -34,13 +34,13 @@ class TestExtractEpubText:
         assert "Chapter two" in text2
 
     def test_text_cleaning(self, mock_epub):
-        """Extracted text should be cleaned."""
+        """Extracted text should keep paragraph boundaries without noisy whitespace."""
         result = extract_epub_text("test.epub")
 
-        # Text should not have excessive whitespace
         for _, text in result:
-            assert "  " not in text  # No double spaces
-            assert "\n" not in text  # No newlines (cleaned)
+            assert "  " not in text
+            assert "\n\n" in text
+            assert "\n\n\n" not in text
 
     def test_empty_epub_raises_error(self):
         """EPUB with no readable content should raise ValueError."""
@@ -55,15 +55,17 @@ class TestExtractEpubText:
 
             assert "No readable text" in str(excinfo.value)
 
-    def test_chapter_without_title(self):
-        """Chapter without title tag should have empty title."""
+    def test_chapter_without_title_uses_heading_fallback(self):
+        """Chapter title should fall back to the first heading before numbering."""
         with patch("app.epub") as mock_epub:
             mock_book = MagicMock()
             mock_item = MagicMock()
-            # HTML without title tag
             mock_item.get_content.return_value = b"""
             <html>
-                <body><p>Content without title.</p></body>
+                <body>
+                    <h1>Visible Heading</h1>
+                    <p>Content without title.</p>
+                </body>
             </html>
             """
             mock_book.get_items_of_type.return_value = [mock_item]
@@ -73,7 +75,7 @@ class TestExtractEpubText:
 
             assert len(result) == 1
             title, text = result[0]
-            assert title == ""
+            assert title == "Visible Heading"
             assert "Content without title" in text
 
     def test_chapter_with_only_whitespace_skipped(self):
@@ -131,6 +133,56 @@ class TestExtractEpubText:
             assert "Heading" in text
             assert "bold" in text
             assert "italic" in text
+
+    def test_parse_epub_ignores_navigation_documents_and_head_text(self):
+        """Navigation-only docs should be skipped and title text should not leak into body text."""
+        with patch("app.epub") as mock_epub:
+            mock_book = MagicMock()
+            nav_item = MagicMock()
+            nav_item.get_content.return_value = b"""
+            <html>
+                <body>
+                    <nav epub:type="toc">
+                        <ol><li>Table of contents</li></ol>
+                    </nav>
+                </body>
+            </html>
+            """
+            nav_item.get_name.return_value = "nav.xhtml"
+
+            chapter_item = MagicMock()
+            chapter_item.get_content.return_value = b"""
+            <html>
+                <head><title>Head Title</title></head>
+                <body>
+                    <h1>Chapter Heading</h1>
+                    <p>Body text only.</p>
+                </body>
+            </html>
+            """
+            chapter_item.get_name.return_value = "chapter-1.xhtml"
+
+            mock_book.get_metadata.side_effect = lambda ns, key: {
+                ('DC', 'title'): [('Test Book', {})],
+                ('DC', 'creator'): [('Test Author', {})],
+                ('OPF', 'cover'): [],
+            }.get((ns, key), [])
+            mock_book.get_items.return_value = []
+            mock_book.get_items_of_type.side_effect = lambda item_type: {
+                app.ebooklib.ITEM_DOCUMENT: [nav_item, chapter_item],
+                app.ebooklib.ITEM_COVER: [],
+                app.ebooklib.ITEM_IMAGE: [],
+            }.get(item_type, [])
+            mock_epub.read_epub.return_value = mock_book
+
+            result = extract_epub_text("test.epub")
+
+            assert len(result) == 1
+            title, text = result[0]
+            assert title == "Chapter Heading"
+            assert "Body text only." in text
+            assert "Head Title" not in text
+            assert "Table of contents" not in text
 
     def test_parse_epub_reports_document_progress(self):
         """Shared parser should report document-level progress."""

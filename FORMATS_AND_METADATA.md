@@ -57,7 +57,7 @@ M4B export always uses a spool-file path in the current implementation.
 
 - Title from EPUB metadata or `--title`
 - Author from EPUB metadata or `--author`
-- Chapter markers derived from EPUB chapter boundaries and final sample offsets
+- Chapter markers derived from parsed EPUB content documents and final sample offsets
 - Optional cover image from `--cover` or the EPUB cover when present
 
 ### M4B options
@@ -111,11 +111,13 @@ The current CLI behavior depends on batch size:
 
 | CLI path | Current behavior |
 | --- | --- |
-| Single-file `m4b` | Opens the metadata editor, lets the user edit title, author, and cover, then passes overrides to the backend |
+| Single-file `m4b` | Opens the metadata editor, lets the user review title, author, and cover, and only passes explicit edits as overrides |
 | Multi-file `m4b` | Skips the metadata editor and keeps per-file EPUB metadata without a per-file override UI |
 | Any non-`m4b` output | Does not keep metadata override fields |
 
 This distinction matters because the CLI planner strips metadata override fields unless the batch contains exactly one file and the output format is `m4b`.
+
+If metadata extraction fails in the CLI, the editor opens with blank text fields and a warning so the final M4B keeps EPUB metadata unless the user explicitly enters overrides.
 
 ### Cover image overrides
 
@@ -131,15 +133,16 @@ If the file does not exist, the backend raises `FileNotFoundError`.
 
 ## Chapter Markers (M4B)
 
-Chapter markers are generated from EPUB chapter boundaries after chunking and audio generation.
+Chapter markers are generated from parsed EPUB content sections after chunking and audio generation.
 
 At a high level:
-1. EPUB text is split into chunks while preserving chapter-start references
-2. The backend tracks sample offsets while processing chunks
-3. Chapter boundaries are converted into `ffmetadata` chapter entries
-4. `ffmpeg` writes the final M4B with embedded chapters
+1. EPUB parsing extracts body content, preserves paragraph boundaries, skips navigation-only documents, and derives a section title from TOC labels, visible headings, or HTML `<title>`
+2. EPUB text is split into chunks while preserving chapter-start references
+3. The backend tracks sample offsets while processing chunks
+4. Chapter boundaries are converted into `ffmetadata` chapter entries using a sample-accurate timebase
+5. `ffmpeg` writes the final M4B with embedded chapters
 
-If a chapter title is missing, the backend falls back to `Chapter <n>`.
+If a section title cannot be derived, the backend falls back to `Chapter <n>`.
 
 ## Format-Specific Operational Notes
 

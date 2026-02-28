@@ -464,6 +464,58 @@ class TestMainCleanupBehavior:
 
         mock_epub.read_epub.assert_called_once_with(str(args.input))
 
+    def test_main_passes_sample_accurate_chapter_info_to_m4b_export(self, monkeypatch, tmp_path):
+        args = build_main_args(
+            tmp_path,
+            output=str(tmp_path / "output.m4b"),
+            format="m4b",
+        )
+        events = MagicMock()
+        parsed_epub = app.ParsedEpub(
+            metadata=app.BookMetadata(title="Title", author="Author"),
+            chapters=[("Intro", "A"), ("", "B")],
+        )
+        backend = SimpleNamespace(
+            name="mock",
+            sample_rate=24000,
+            initialize=MagicMock(),
+            generate=MagicMock(side_effect=[
+                [np.array([0.1, 0.2], dtype=np.float32)],
+                [np.array([0.3, 0.4, 0.5], dtype=np.float32)],
+                [np.array([0.6, 0.7, 0.8, 0.9], dtype=np.float32)],
+            ]),
+            cleanup=MagicMock(),
+        )
+        export_m4b = MagicMock()
+
+        monkeypatch.setattr(app.sys, "version_info", (3, 12, 0))
+        monkeypatch.setattr(app, "parse_args", lambda: args)
+        monkeypatch.setattr(app, "EventEmitter", lambda **kwargs: events)
+        monkeypatch.setattr(app, "resolve_backend", lambda _: "mock")
+        monkeypatch.setattr(app, "parse_epub", lambda *args, **kwargs: parsed_epub)
+        monkeypatch.setattr(
+            app,
+            "split_text_to_chunks",
+            lambda chapters, chunk_chars: (
+                [
+                    app.TextChunk("Intro", "chunk-1"),
+                    app.TextChunk("Intro", "chunk-2"),
+                    app.TextChunk("", "chunk-3"),
+                ],
+                [(0, "Intro"), (2, "")],
+            ),
+        )
+        monkeypatch.setattr(app, "create_backend", lambda _: backend)
+        monkeypatch.setattr(app, "export_pcm_file_to_m4b", export_m4b)
+
+        app.main()
+
+        chapter_infos = export_m4b.call_args.kwargs["chapters"]
+        assert chapter_infos == [
+            app.ChapterInfo(title="Intro", start_sample=0, end_sample=5),
+            app.ChapterInfo(title="Chapter 2", start_sample=5, end_sample=9),
+        ]
+
 
 @pytest.mark.unit
 class TestBackendAvailabilityHelpers:

@@ -40,6 +40,7 @@ describe('metadata utils', () => {
             title: 'Test Book',
             author: 'Jane Doe',
             hasCover: true,
+            extracted: true,
         });
 
         expect(spawn).toHaveBeenCalledWith(
@@ -52,7 +53,7 @@ describe('metadata utils', () => {
         );
     });
 
-    it('returns default metadata when lines are missing', async () => {
+    it('returns extracted status without synthetic fallback metadata when lines are missing', async () => {
         const proc = new FakeChildProcess();
         vi.mocked(spawn).mockReturnValue(proc as any);
 
@@ -61,9 +62,8 @@ describe('metadata utils', () => {
         proc.emit('close', 0);
 
         await expect(promise).resolves.toEqual({
-            title: 'Unknown Title',
-            author: 'Unknown Author',
             hasCover: false,
+            extracted: true,
         });
     });
 

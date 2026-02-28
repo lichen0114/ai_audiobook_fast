@@ -7,7 +7,10 @@ export interface BookMetadata {
     title: string;
     author: string;
     hasCover: boolean;
-    coverPath?: string; // Custom cover path if overridden
+    coverPath?: string;
+    titleOverride?: string;
+    authorOverride?: string;
+    warning?: string;
 }
 
 interface MetadataEditorProps {
@@ -17,13 +20,16 @@ interface MetadataEditorProps {
 }
 
 type EditorStep = 'review' | 'edit_title' | 'edit_author' | 'edit_cover';
+type CoverMode = 'epub' | 'custom' | 'none';
 
 export function MetadataEditor({ metadata, onConfirm, onBack }: MetadataEditorProps) {
     const [step, setStep] = useState<EditorStep>('review');
     const [title, setTitle] = useState(metadata.title);
     const [author, setAuthor] = useState(metadata.author);
     const [coverPath, setCoverPath] = useState(metadata.coverPath || '');
-    const [hasCover, setHasCover] = useState(metadata.hasCover);
+    const [coverMode, setCoverMode] = useState<CoverMode>(
+        metadata.coverPath ? 'custom' : metadata.hasCover ? 'epub' : 'none',
+    );
 
     useInput((input, key) => {
         if (key.escape) {
@@ -38,12 +44,29 @@ export function MetadataEditor({ metadata, onConfirm, onBack }: MetadataEditorPr
     const handleReviewSelect = (item: { value: string }) => {
         switch (item.value) {
             case 'continue':
-                onConfirm({
-                    title,
-                    author,
-                    hasCover: hasCover || !!coverPath,
-                    coverPath: coverPath || undefined,
-                });
+                {
+                    const normalizedTitle = title.trim();
+                    const normalizedAuthor = author.trim();
+                    const customCoverPath = coverMode === 'custom' ? (coverPath || undefined) : undefined;
+
+                    onConfirm({
+                        title: normalizedTitle,
+                        author: normalizedAuthor,
+                        hasCover: coverMode !== 'none',
+                        coverPath: customCoverPath,
+                        titleOverride: normalizedTitle && normalizedTitle !== metadata.title
+                            ? normalizedTitle
+                            : undefined,
+                        authorOverride: normalizedAuthor && normalizedAuthor !== metadata.author
+                            ? normalizedAuthor
+                            : undefined,
+                        warning: metadata.warning,
+                    });
+                }
+                break;
+            case 'clear_cover':
+                setCoverPath('');
+                setCoverMode(metadata.hasCover ? 'epub' : 'none');
                 break;
             case 'edit_title':
                 setStep('edit_title');
@@ -72,18 +95,39 @@ export function MetadataEditor({ metadata, onConfirm, onBack }: MetadataEditorPr
     };
 
     const handleCoverSubmit = (value: string) => {
-        if (value.trim()) {
-            setCoverPath(value.trim());
-            setHasCover(true);
+        const normalizedValue = value.trim();
+        if (normalizedValue) {
+            setCoverPath(normalizedValue);
+            setCoverMode('custom');
+        } else {
+            setCoverPath('');
+            setCoverMode(metadata.hasCover ? 'epub' : 'none');
         }
         setStep('review');
     };
+
+    const effectiveHasCover = coverMode !== 'none';
+    const reviewItems = [
+        { label: '✅ Continue with this metadata', value: 'continue' },
+        { label: '📕 Edit Title', value: 'edit_title' },
+        { label: '✍️  Edit Author', value: 'edit_author' },
+        { label: '🖼️  Set Custom Cover Image', value: 'edit_cover' },
+        ...(coverMode === 'custom'
+            ? [{ label: metadata.hasCover ? '🖼️  Use EPUB Cover' : '🗑️  Clear Custom Cover', value: 'clear_cover' }]
+            : []),
+    ];
 
     return (
         <Box flexDirection="column" paddingX={2}>
             <Box marginBottom={1}>
                 <Text color="cyan">📖 M4B Metadata</Text>
             </Box>
+
+            {metadata.warning && (
+                <Box marginBottom={1}>
+                    <Text color="yellow">{metadata.warning}</Text>
+                </Box>
+            )}
 
             {/* Metadata Summary Box */}
             <Box
@@ -97,14 +141,14 @@ export function MetadataEditor({ metadata, onConfirm, onBack }: MetadataEditorPr
                 <Text color="white" bold>Book Information:</Text>
                 <Box marginTop={1} flexDirection="column">
                     <Text>
-                        📕 Title: <Text color={step === 'edit_title' ? 'yellow' : 'green'}>{title}</Text>
+                        📕 Title: <Text color={step === 'edit_title' ? 'yellow' : title ? 'green' : 'gray'}>{title || 'Not detected'}</Text>
                     </Text>
                     <Text>
-                        ✍️  Author: <Text color={step === 'edit_author' ? 'yellow' : 'green'}>{author}</Text>
+                        ✍️  Author: <Text color={step === 'edit_author' ? 'yellow' : author ? 'green' : 'gray'}>{author || 'Not detected'}</Text>
                     </Text>
                     <Text>
-                        🖼️  Cover: <Text color={step === 'edit_cover' ? 'yellow' : hasCover || coverPath ? 'green' : 'gray'}>
-                            {coverPath ? `Custom: ${coverPath}` : (hasCover ? 'From EPUB' : 'None')}
+                        🖼️  Cover: <Text color={step === 'edit_cover' ? 'yellow' : effectiveHasCover ? 'green' : 'gray'}>
+                            {coverMode === 'custom' ? `Custom: ${coverPath}` : (coverMode === 'epub' ? 'From EPUB' : 'None')}
                         </Text>
                     </Text>
                 </Box>
@@ -115,14 +159,12 @@ export function MetadataEditor({ metadata, onConfirm, onBack }: MetadataEditorPr
                 <Box flexDirection="column">
                     <Text color="yellow" bold>Review metadata for your audiobook:</Text>
                     <Text dimColor>This info will be embedded in the M4B file</Text>
+                    {!metadata.title && !metadata.author && (
+                        <Text dimColor>Leave the text fields blank to keep EPUB metadata untouched.</Text>
+                    )}
                     <Box marginTop={1}>
                         <SelectInput
-                            items={[
-                                { label: '✅ Continue with this metadata', value: 'continue' },
-                                { label: '📕 Edit Title', value: 'edit_title' },
-                                { label: '✍️  Edit Author', value: 'edit_author' },
-                                { label: '🖼️  Set Custom Cover Image', value: 'edit_cover' },
-                            ]}
+                            items={reviewItems}
                             onSelect={handleReviewSelect}
                         />
                     </Box>

@@ -91,11 +91,12 @@ class TestM4BGeneration:
         # Verify chapters
         assert result.count("[CHAPTER]") == 3
 
-        # Verify timing (60 seconds = 60000 ms)
+        # Verify sample-accurate timing at 24000 Hz
         assert "START=0" in result
-        assert "END=60000" in result
-        assert "START=60000" in result
-        assert "END=120000" in result
+        assert "TIMEBASE=1/24000" in result
+        assert "END=1440000" in result
+        assert "START=1440000" in result
+        assert "END=2880000" in result
 
     @pytest.mark.slow
     def test_m4b_export_with_mock_ffmpeg(self, temp_dir):
@@ -136,10 +137,7 @@ class TestM4BGeneration:
                 assert "-disposition:v:0" in cmd
 
     def test_chapter_info_sample_to_time_conversion(self):
-        """Test that sample positions convert to correct timestamps."""
-        # At 24000 Hz:
-        # 24000 samples = 1 second = 1000 ms
-        # 72000 samples = 3 seconds = 3000 ms
+        """Test that sample positions are emitted directly in chapter metadata."""
         metadata = BookMetadata(title="Book", author="Author")
         chapters = [
             ChapterInfo(title="Ch1", start_sample=0, end_sample=24000),
@@ -148,14 +146,14 @@ class TestM4BGeneration:
 
         result = generate_ffmetadata(metadata, chapters, sample_rate=24000)
 
-        # Parse chapter timings
         assert "START=0" in result
-        assert "END=1000" in result
-        assert "START=1000" in result
-        assert "END=3000" in result
+        assert "TIMEBASE=1/24000" in result
+        assert "END=24000" in result
+        assert "START=24000" in result
+        assert "END=72000" in result
 
     def test_empty_toc_fallback(self):
-        """Test that chapters get numbered if no titles are present."""
+        """Test that fallback chapter titles are synthesized when headings are missing."""
         chapters = [
             ("", "Content without a title."),
             ("", "More content without title."),
@@ -163,12 +161,8 @@ class TestM4BGeneration:
 
         chunks, chapter_starts = split_text_to_chunks(chapters, chunk_chars=100)
 
-        # Chapter starts should have empty titles
         assert chapter_starts[0][1] == ""
         assert chapter_starts[1][1] == ""
-
-        # When building ChapterInfo, the main code falls back to "Chapter N"
-        # This tests the input scenario
 
     def test_single_chapter_book(self):
         """Test handling of a book with only one chapter."""

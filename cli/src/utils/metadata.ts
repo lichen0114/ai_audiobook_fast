@@ -2,9 +2,10 @@ import { spawn } from 'child_process';
 import { getNullDevice, resolvePythonRuntime } from './python-runtime.js';
 
 export interface ExtractedMetadata {
-    title: string;
-    author: string;
+    title?: string;
+    author?: string;
     hasCover: boolean;
+    extracted: boolean;
 }
 
 /**
@@ -48,9 +49,8 @@ export function extractMetadata(epubPath: string): Promise<ExtractedMetadata> {
             if (code === 0) {
                 // Parse the metadata from stdout
                 const metadata: ExtractedMetadata = {
-                    title: 'Unknown Title',
-                    author: 'Unknown Author',
                     hasCover: false,
+                    extracted: true,
                 };
 
                 const lines = stdout.split('\n');
