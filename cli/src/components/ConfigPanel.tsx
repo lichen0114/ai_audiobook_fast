@@ -3,13 +3,16 @@ import { Box, Text, useInput } from 'ink';
 import SelectInput from 'ink-select-input';
 import TextInput from 'ink-text-input';
 import * as path from 'path';
-import type { TTSConfig, FileJob } from '../App.js';
+import type { FileJob, TTSConfig } from '../types/profile.js';
 
 // Optimal chunk sizes per backend based on benchmarks
 // MLX: 900 chars = 180 chars/s (+11% vs 1200)
 // PyTorch: 600 chars = 98 chars/s (+3% vs 1200)
 const AUTO_CHUNK_CHARS =
     process.platform === 'darwin' && process.arch === 'arm64' ? 900 : 600;
+const DEFAULT_RECOVERY_MODE =
+    process.platform === 'darwin' && process.arch === 'arm64' ? 'apple-balanced' : 'off';
+const DEFAULT_WORKERS = 1;
 
 const BACKEND_CHUNK_CHARS: Record<'auto' | 'pytorch' | 'mlx' | 'mock', number> = {
     auto: AUTO_CHUNK_CHARS,
@@ -59,7 +62,7 @@ const speeds = [
 ];
 
 const backends = [
-    { label: '🧠 Auto (Apple Silicon optimized)', value: 'auto' },
+    { label: '🧠 Auto (Adaptive Apple Silicon)', value: 'auto' },
     { label: '🔥 PyTorch/MPS (Stable)', value: 'pytorch' },
     { label: '⚡ MLX (Faster - Experimental)', value: 'mlx' },
 ];
@@ -85,7 +88,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
     const [selectedBackend, setSelectedBackend] = useState<'auto' | 'pytorch' | 'mlx' | 'mock'>(config.backend || 'auto');
     const [selectedFormat, setSelectedFormat] = useState<'mp3' | 'm4b'>(config.outputFormat || 'mp3');
     const [selectedChunkChars, setSelectedChunkChars] = useState(config.chunkChars || BACKEND_CHUNK_CHARS[config.backend || 'auto']);
-    const [selectedWorkers, setSelectedWorkers] = useState(config.workers || 2);
+    const [selectedWorkers, setSelectedWorkers] = useState(config.workers || DEFAULT_WORKERS);
     const [useMPS, setUseMPS] = useState(config.useMPS);
     const [checkpointEnabled, setCheckpointEnabled] = useState(config.checkpointEnabled || false);
     const [outputDir, setOutputDir] = useState<string | null>(config.outputDir);
@@ -207,6 +210,8 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                 bitrate: selectedBitrate,
                 normalize,
                 checkpointEnabled,
+                pipelineMode: config.pipelineMode || 'auto',
+                recoveryMode: config.recoveryMode || DEFAULT_RECOVERY_MODE,
             });
         } else if (item.value === 'accent') {
             setStep('accent');
@@ -351,7 +356,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
             {step === 'backend' && (
                 <Box flexDirection="column">
                     <Text color="yellow" bold>Select TTS backend:</Text>
-                    <Text dimColor>Auto prefers MLX on Apple Silicon and falls back to PyTorch when needed</Text>
+                    <Text dimColor>Auto starts fast on Apple Silicon and falls back to safer settings after a crash</Text>
                     <Box marginTop={1}>
                         <SelectInput
                             items={backends}
@@ -402,7 +407,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
             {step === 'workers' && (
                 <Box flexDirection="column">
                     <Text color="yellow" bold>Worker compatibility setting:</Text>
-                    <Text dimColor>Current backend runs sequential inference; this setting is reserved for future parallel modes</Text>
+                    <Text dimColor>Current backend runs sequential inference. Keep this at 1 for the safest Mac batch runs.</Text>
                     <Box marginTop={1}>
                         <SelectInput
                             items={[
@@ -411,7 +416,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
                                 { label: '4 Workers (Compatibility)', value: '4' },
                             ]}
                             onSelect={handleWorkerSelect}
-                            initialIndex={[1, 2, 4].indexOf(selectedWorkers > 4 ? 4 : selectedWorkers || 2)}
+                            initialIndex={[1, 2, 4].indexOf(selectedWorkers > 4 ? 4 : selectedWorkers || DEFAULT_WORKERS)}
                         />
                     </Box>
                 </Box>
@@ -439,7 +444,7 @@ export function ConfigPanel({ files, config, onConfirm, onBack }: ConfigPanelPro
             {step === 'gpu' && (
                 <Box flexDirection="column">
                     <Text color="yellow" bold>Apple Silicon GPU Acceleration (MPS):</Text>
-                    <Text dimColor>Enable for faster processing on M1/M2/M3 Macs</Text>
+                    <Text dimColor>Enable for speed on M1/M2/M3 Macs. Disable it if batches become unstable.</Text>
                     <Box marginTop={1}>
                         <SelectInput
                             items={[

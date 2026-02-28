@@ -149,7 +149,8 @@ def test_resume_reuses_saved_chunk_audio_in_order(temp_dir):
                                 with patch("app.export_pcm_file_to_mp3") as mock_export:
                                     with patch("app.save_checkpoint"):
                                         with patch("app.cleanup_checkpoint"):
-                                            main()
+                                            with patch("app.sys.version_info", (3, 12, 0)):
+                                                main()
 
     mock_load_chunk.assert_called_once()
     mock_export.assert_called_once()

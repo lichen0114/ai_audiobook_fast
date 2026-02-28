@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import Gradient from 'ink-gradient';
-import type { FileJob, TTSConfig } from '../App.js';
+import type { FileJob, TTSConfig } from '../types/profile.js';
 import { runTTS, type ProgressInfo, type ProcessingPhase } from '../utils/tts-runner.js';
 import { GpuMonitor } from './GpuMonitor.js';
 import * as path from 'path';
@@ -31,6 +31,15 @@ function parseErrorMessage(error: string): string {
     }
     if (errorLower.includes('mps backend') || errorLower.includes('metal')) {
         return `GPU acceleration error - try disabling MPS or updating macOS${logSuffix}`;
+    }
+    if (
+        errorLower.includes('abort trap')
+        || errorLower.includes('segmentation fault')
+        || errorLower.includes('bus error')
+        || errorLower.includes('killed')
+        || errorLower.includes('signal')
+    ) {
+        return `Backend crashed on macOS - retrying with safer settings may help${logSuffix}`;
     }
 
     // File errors
@@ -242,6 +251,8 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
     // Total characters for stats
     const [totalChars, setTotalChars] = useState<number | undefined>(undefined);
     const totalCharsRef = React.useRef<number | undefined>(undefined);
+    const [recoveryInfo, setRecoveryInfo] = useState<ProgressInfo['recovery']>(undefined);
+    const recoveryInfoRef = React.useRef<ProgressInfo['recovery']>(undefined);
 
     // Stall detection
     const [isStalled, setIsStalled] = useState(false);
@@ -271,6 +282,7 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
     const hasPhaseUpdate = React.useRef(false);
     const hasTimingUpdate = React.useRef(false);
     const hasCharsUpdate = React.useRef(false);
+    const hasRecoveryUpdate = React.useRef(false);
 
     const [eta, setEta] = useState<string>('Calculating...');
     const etaRef = React.useRef<string>('Calculating...');
@@ -308,6 +320,11 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                 hasCharsUpdate.current = false;
             }
 
+            if (hasRecoveryUpdate.current) {
+                setRecoveryInfo(recoveryInfoRef.current);
+                hasRecoveryUpdate.current = false;
+            }
+
             // Sync ETA (always sync simple string, low cost)
             setEta(etaRef.current);
 
@@ -338,6 +355,9 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                 // Clear worker states for new file
                 workerStatesRef.current = new Map();
                 hasWorkerUpdates.current = true; // Force update
+                recoveryInfoRef.current = undefined;
+                hasRecoveryUpdate.current = true;
+                etaRef.current = 'Calculating...';
 
                 // Update status to processing
                 setFiles(prev => {
@@ -355,6 +375,32 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                         files[i].outputPath,
                         config,
                         (progressInfo: ProgressInfo) => {
+                            if (progressInfo.recovery) {
+                                recoveryInfoRef.current = progressInfo.recovery;
+                                hasRecoveryUpdate.current = true;
+                                workerStatesRef.current = new Map();
+                                hasWorkerUpdates.current = true;
+                                currentPhaseRef.current = undefined;
+                                hasPhaseUpdate.current = true;
+                                emaChunkTimeRef.current = undefined;
+                                hasTimingUpdate.current = true;
+                                totalCharsRef.current = undefined;
+                                hasCharsUpdate.current = true;
+                                etaRef.current = 'Recalibrating...';
+                                lastHeartbeatRef.current = Date.now();
+
+                                const currentFiles = [...filesRef.current];
+                                currentFiles[i] = {
+                                    ...currentFiles[i],
+                                    progress: 0,
+                                    currentChunk: undefined,
+                                    totalChunks: undefined,
+                                    error: undefined,
+                                };
+                                filesRef.current = currentFiles;
+                                hasFileUpdates.current = true;
+                            }
+
                             // Update phase
                             if (progressInfo.phase && progressInfo.phase !== currentPhaseRef.current) {
                                 currentPhaseRef.current = progressInfo.phase;
@@ -454,6 +500,8 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                     emaChunkTimeRef.current = undefined;
                     totalCharsRef.current = undefined;
                     currentPhaseRef.current = undefined;
+                    recoveryInfoRef.current = undefined;
+                    hasRecoveryUpdate.current = true;
                 } catch (error) {
                     // Mark as error with user-friendly message
                     const rawError = error instanceof Error ? error.message : 'Unknown error';
@@ -475,6 +523,8 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                     emaChunkTimeRef.current = undefined;
                     totalCharsRef.current = undefined;
                     currentPhaseRef.current = undefined;
+                    recoveryInfoRef.current = undefined;
+                    hasRecoveryUpdate.current = true;
                 }
             }
 
@@ -593,6 +643,21 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                     <Box marginTop={1}>
                         <ProgressBar progress={currentFile.progress} width={35} useGradient={true} />
                     </Box>
+                    {recoveryInfo && (
+                        <Box
+                            flexDirection="column"
+                            marginTop={1}
+                            borderStyle="round"
+                            borderColor="yellow"
+                            paddingX={1}
+                        >
+                            <Text color="yellow" bold>Retrying with safer Mac settings...</Text>
+                            <Text dimColor>{recoveryInfo.reason}</Text>
+                            <Text dimColor>
+                                Fallback: {recoveryInfo.backend} {recoveryInfo.useMPS ? 'GPU' : 'CPU'}, {recoveryInfo.pipelineMode}, {recoveryInfo.chunkChars} chars, {recoveryInfo.workers} worker
+                            </Text>
+                        </Box>
+                    )}
                     {/* Mini-chunks indicator for small batches */}
                     {currentFile.currentChunk !== undefined && currentFile.totalChunks !== undefined && (
                         <MiniChunksIndicator current={currentFile.currentChunk} total={currentFile.totalChunks} />

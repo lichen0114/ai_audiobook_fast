@@ -13,6 +13,7 @@ import pytest
 ROOT_DIR = Path(__file__).resolve().parents[2]
 APP_PATH = ROOT_DIR / "app.py"
 SAMPLE_EPUB = ROOT_DIR / "tests" / "fixtures" / "sample.epub"
+SUPPORTED_RUNTIME = (3, 10) <= sys.version_info < (3, 13)
 
 
 def run_app(args: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -41,6 +42,7 @@ def assert_phase_order(stdout: str) -> None:
 
 @pytest.mark.e2e
 @pytest.mark.integration
+@pytest.mark.skipif(not SUPPORTED_RUNTIME, reason="app main() supports Python 3.10-3.12")
 def test_mock_backend_mp3_end_to_end(tmp_path: Path):
     output_path = tmp_path / "mock-e2e.mp3"
     checkpoint_dir = Path(f"{output_path}.checkpoint")
@@ -66,6 +68,7 @@ def test_mock_backend_mp3_end_to_end(tmp_path: Path):
 
 @pytest.mark.e2e
 @pytest.mark.integration
+@pytest.mark.skipif(not SUPPORTED_RUNTIME, reason="app main() supports Python 3.10-3.12")
 def test_mock_backend_mp3_overlap3_end_to_end(tmp_path: Path):
     output_path = tmp_path / "mock-overlap3.mp3"
 
@@ -87,6 +90,7 @@ def test_mock_backend_mp3_overlap3_end_to_end(tmp_path: Path):
 
 @pytest.mark.e2e
 @pytest.mark.integration
+@pytest.mark.skipif(not SUPPORTED_RUNTIME, reason="app main() supports Python 3.10-3.12")
 def test_mock_backend_m4b_end_to_end_with_ffprobe(tmp_path: Path):
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         pytest.skip("ffmpeg/ffprobe not available")
@@ -132,6 +136,7 @@ def test_mock_backend_m4b_end_to_end_with_ffprobe(tmp_path: Path):
 
 @pytest.mark.e2e
 @pytest.mark.integration
+@pytest.mark.skipif(not SUPPORTED_RUNTIME, reason="app main() supports Python 3.10-3.12")
 def test_resume_after_failed_export_uses_checkpoint(tmp_path: Path):
     output_path = tmp_path / "resume-e2e.mp3"
     checkpoint_dir = Path(f"{output_path}.checkpoint")
@@ -169,6 +174,7 @@ def test_resume_after_failed_export_uses_checkpoint(tmp_path: Path):
 
 @pytest.mark.e2e
 @pytest.mark.integration
+@pytest.mark.skipif(not SUPPORTED_RUNTIME, reason="app main() supports Python 3.10-3.12")
 @pytest.mark.parametrize(
     "args, expected_substring",
     [

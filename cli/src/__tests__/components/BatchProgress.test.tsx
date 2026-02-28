@@ -1,7 +1,84 @@
-import { describe, it, expect } from 'vitest';
+import React from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render } from 'ink-testing-library';
 
-// Test the parseErrorMessage function from BatchProgress.tsx
-// Extract the function logic for testing
+import type { FileJob, TTSConfig } from '../../types/profile.js';
+
+vi.mock('ink', async () => {
+    const actual = await vi.importActual<any>('ink');
+    return {
+        ...actual,
+        useApp: () => ({ exit: vi.fn() }),
+        useInput: vi.fn(),
+    };
+});
+
+vi.mock('ink-gradient', () => ({
+    default: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('../../components/GpuMonitor.js', () => ({
+    GpuMonitor: () => null,
+}));
+
+vi.mock('../../utils/tts-runner.js', () => ({
+    runTTS: vi.fn(),
+}));
+
+import { BatchProgress } from '../../components/BatchProgress.js';
+import { runTTS, type ProgressInfo } from '../../utils/tts-runner.js';
+
+const baseConfig: TTSConfig = {
+    voice: 'af_heart',
+    speed: 1,
+    langCode: 'a',
+    chunkChars: 900,
+    useMPS: true,
+    outputDir: null,
+    workers: 2,
+    backend: 'auto',
+    outputFormat: 'mp3',
+    bitrate: '192k',
+    normalize: false,
+    checkpointEnabled: false,
+    pipelineMode: 'auto',
+    recoveryMode: 'apple-balanced',
+};
+
+function createFileJob(id: string, inputPath: string): FileJob {
+    return {
+        id,
+        inputPath,
+        outputPath: inputPath.replace(/\.epub$/, '.mp3'),
+        status: 'pending',
+        progress: 0,
+    };
+}
+
+function BatchProgressHarness({
+    initialFiles,
+    onComplete,
+    onFilesChange,
+}: {
+    initialFiles: FileJob[];
+    onComplete: () => void;
+    onFilesChange: (files: FileJob[]) => void;
+}) {
+    const [files, setFiles] = React.useState<FileJob[]>(initialFiles);
+
+    React.useEffect(() => {
+        onFilesChange(files);
+    }, [files, onFilesChange]);
+
+    return (
+        <BatchProgress
+            files={files}
+            setFiles={setFiles}
+            config={baseConfig}
+            onComplete={onComplete}
+        />
+    );
+}
 
 function parseErrorMessage(error: string): string {
     const errorLower = error.toLowerCase();
@@ -12,6 +89,15 @@ function parseErrorMessage(error: string): string {
     }
     if (errorLower.includes('mps backend') || errorLower.includes('metal')) {
         return 'GPU acceleration error - try disabling MPS or updating macOS';
+    }
+    if (
+        errorLower.includes('abort trap')
+        || errorLower.includes('segmentation fault')
+        || errorLower.includes('bus error')
+        || errorLower.includes('killed')
+        || errorLower.includes('signal')
+    ) {
+        return 'Backend crashed on macOS - retrying with safer settings may help';
     }
 
     // FFmpeg errors (check before generic "not found" since ffmpeg messages contain "not found")
@@ -71,7 +157,18 @@ function parseErrorMessage(error: string): string {
     return error.length > 100 ? error.substring(0, 100) + '...' : error;
 }
 
+async function advanceUi(ms = 300): Promise<void> {
+    await vi.advanceTimersByTimeAsync(ms);
+    await Promise.resolve();
+}
+
 describe('BatchProgress', () => {
+    afterEach(() => {
+        cleanup();
+        vi.clearAllMocks();
+        vi.useRealTimers();
+    });
+
     describe('parseErrorMessage', () => {
         describe('GPU/Memory errors', () => {
             it('should parse out of memory errors', () => {
@@ -92,6 +189,11 @@ describe('BatchProgress', () => {
             it('should parse Metal errors', () => {
                 const result = parseErrorMessage('Metal device not found');
                 expect(result).toBe('GPU acceleration error - try disabling MPS or updating macOS');
+            });
+
+            it('should parse macOS native crash errors', () => {
+                const result = parseErrorMessage('Abort trap: 6');
+                expect(result).toBe('Backend crashed on macOS - retrying with safer settings may help');
             });
         });
 
@@ -184,7 +286,7 @@ describe('BatchProgress', () => {
             it('should return truncated error for unknown errors', () => {
                 const longError = 'x'.repeat(150);
                 const result = parseErrorMessage(longError);
-                expect(result.length).toBe(103); // 100 + '...'
+                expect(result.length).toBe(103);
                 expect(result.endsWith('...')).toBe(true);
             });
 
@@ -230,7 +332,7 @@ RuntimeError: Something went wrong`;
         });
 
         it('should have correct phase labels', () => {
-            const PHASE_LABELS: Record<string, string> = {
+            const phaseLabels: Record<string, string> = {
                 PARSING: 'Parsing',
                 INFERENCE: 'Inference',
                 CONCATENATING: 'Concatenating',
@@ -238,46 +340,144 @@ RuntimeError: Something went wrong`;
                 DONE: 'Done',
             };
 
-            expect(PHASE_LABELS.PARSING).toBe('Parsing');
-            expect(PHASE_LABELS.INFERENCE).toBe('Inference');
-            expect(PHASE_LABELS.CONCATENATING).toBe('Concatenating');
-            expect(PHASE_LABELS.EXPORTING).toBe('Exporting');
-            expect(PHASE_LABELS.DONE).toBe('Done');
+            expect(phaseLabels.PARSING).toBe('Parsing');
+            expect(phaseLabels.INFERENCE).toBe('Inference');
+            expect(phaseLabels.CONCATENATING).toBe('Concatenating');
+            expect(phaseLabels.EXPORTING).toBe('Exporting');
+            expect(phaseLabels.DONE).toBe('Done');
         });
     });
 
     describe('EMA calculation', () => {
         it('should calculate EMA correctly', () => {
-            const EMA_ALPHA = 0.3;
+            const emaAlpha = 0.3;
             let ema: number | undefined = undefined;
 
-            // First value
             const v1 = 1000;
             ema = v1;
             expect(ema).toBe(1000);
 
-            // Second value
             const v2 = 2000;
-            ema = EMA_ALPHA * v2 + (1 - EMA_ALPHA) * ema;
+            ema = emaAlpha * v2 + (1 - emaAlpha) * ema;
             expect(ema).toBe(1300);
+
+            const v3 = 500;
+            ema = emaAlpha * v3 + (1 - emaAlpha) * ema;
+            expect(ema).toBeCloseTo(1060);
         });
     });
 
-    describe('Stall detection', () => {
-        it('should detect stall after threshold', () => {
-            const STALL_THRESHOLD_MS = 15000;
-            const lastHeartbeat = Date.now() - 20000; // 20 seconds ago
-            const timeSinceHeartbeat = Date.now() - lastHeartbeat;
+    describe('batch flow with mock data', () => {
+        it('processes multiple books sequentially and shows recovery status for a recovered first file', async () => {
+            vi.useFakeTimers();
 
-            expect(timeSinceHeartbeat > STALL_THRESHOLD_MS).toBe(true);
+            const jobs = [
+                createFileJob('1', '/tmp/book-one.epub'),
+                createFileJob('2', '/tmp/book-two.epub'),
+            ];
+            let latestFiles = jobs;
+            const onComplete = vi.fn();
+
+            let releaseFirstRun: (() => void) | undefined;
+            const firstRunGate = new Promise<void>((resolve) => {
+                releaseFirstRun = resolve;
+            });
+
+            vi.mocked(runTTS)
+                .mockImplementationOnce(async (_input, _output, _config, onProgress) => {
+                    onProgress({
+                        progress: 0,
+                        currentChunk: 0,
+                        totalChunks: 0,
+                        recovery: {
+                            attempt: 2,
+                            maxAttempts: 2,
+                            reason: 'mlx backend crashed',
+                            backend: 'pytorch',
+                            useMPS: false,
+                            pipelineMode: 'sequential',
+                            chunkChars: 600,
+                            workers: 1,
+                        },
+                    });
+                    onProgress({ progress: 0, currentChunk: 0, totalChunks: 0, phase: 'PARSING' });
+                    await firstRunGate;
+                    onProgress({ progress: 100, currentChunk: 1, totalChunks: 1, phase: 'DONE' });
+                })
+                .mockImplementationOnce(async (_input, _output, _config, onProgress) => {
+                    onProgress({ progress: 0, currentChunk: 0, totalChunks: 0, phase: 'PARSING' });
+                    onProgress({ progress: 100, currentChunk: 1, totalChunks: 1, phase: 'DONE' });
+                });
+
+            const { lastFrame } = render(
+                <BatchProgressHarness
+                    initialFiles={jobs}
+                    onComplete={onComplete}
+                    onFilesChange={(files) => {
+                        latestFiles = files;
+                    }}
+                />
+            );
+
+            await advanceUi();
+
+            expect(runTTS).toHaveBeenCalledTimes(1);
+            expect(vi.mocked(runTTS).mock.calls[0][0]).toBe('/tmp/book-one.epub');
+            expect(latestFiles[0].status).toBe('processing');
+            expect(lastFrame() ?? '').toContain('Retrying with safer Mac settings...');
+            expect(lastFrame() ?? '').toContain('Fallback: pytorch CPU, sequential, 600 chars, 1 worker');
+
+            releaseFirstRun?.();
+            await advanceUi(600);
+
+            expect(runTTS).toHaveBeenCalledTimes(2);
+            expect(vi.mocked(runTTS).mock.calls[1][0]).toBe('/tmp/book-two.epub');
+
+            await advanceUi(600);
+
+            expect(onComplete).toHaveBeenCalledOnce();
+            expect(latestFiles.map((file) => file.status)).toEqual(['done', 'done']);
+            expect(latestFiles[0].error).toBeUndefined();
+            expect(latestFiles[1].error).toBeUndefined();
         });
 
-        it('should not flag as stalled within threshold', () => {
-            const STALL_THRESHOLD_MS = 15000;
-            const lastHeartbeat = Date.now() - 5000; // 5 seconds ago
-            const timeSinceHeartbeat = Date.now() - lastHeartbeat;
+        it('continues to the next file after a non-recoverable first-file error without showing recovery status', async () => {
+            vi.useFakeTimers();
 
-            expect(timeSinceHeartbeat > STALL_THRESHOLD_MS).toBe(false);
+            const jobs = [
+                createFileJob('1', '/tmp/missing-book.epub'),
+                createFileJob('2', '/tmp/book-two.epub'),
+            ];
+            let latestFiles = jobs;
+            const onComplete = vi.fn();
+
+            vi.mocked(runTTS)
+                .mockImplementationOnce(async () => {
+                    throw new Error('Input EPUB not found');
+                })
+                .mockImplementationOnce(async (_input, _output, _config, onProgress) => {
+                    onProgress({ progress: 0, currentChunk: 0, totalChunks: 0, phase: 'PARSING' });
+                    onProgress({ progress: 100, currentChunk: 1, totalChunks: 1, phase: 'DONE' });
+                });
+
+            const { lastFrame } = render(
+                <BatchProgressHarness
+                    initialFiles={jobs}
+                    onComplete={onComplete}
+                    onFilesChange={(files) => {
+                        latestFiles = files;
+                    }}
+                />
+            );
+
+            await advanceUi(900);
+
+            expect(runTTS).toHaveBeenCalledTimes(2);
+            expect(onComplete).toHaveBeenCalledOnce();
+            expect(latestFiles[0].status).toBe('error');
+            expect(latestFiles[0].error).toContain('Input file not found or inaccessible');
+            expect(latestFiles[1].status).toBe('done');
+            expect(lastFrame() ?? '').not.toContain('Retrying with safer Mac settings...');
         });
     });
 });

@@ -7,8 +7,8 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+import app as app_module
 from app import extract_epub_metadata, BookMetadata
-import ebooklib
 
 
 @pytest.mark.unit
@@ -115,9 +115,9 @@ class TestExtractEpubMetadata:
 
             # No ITEM_COVER
             def get_items_of_type_side_effect(item_type):
-                if item_type == ebooklib.ITEM_COVER:
+                if item_type == app_module.ebooklib.ITEM_COVER:
                     return []
-                elif item_type == ebooklib.ITEM_IMAGE:
+                elif item_type == app_module.ebooklib.ITEM_IMAGE:
                     # Return image with "cover" in name
                     mock_img = MagicMock()
                     mock_img.get_name.return_value = 'images/cover.jpg'

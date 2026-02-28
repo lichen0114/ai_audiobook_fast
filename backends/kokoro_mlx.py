@@ -1,5 +1,6 @@
 """MLX-based Kokoro TTS backend for Apple Silicon."""
 
+import importlib.util
 from typing import Generator
 import numpy as np
 
@@ -97,9 +98,4 @@ class KokoroMLXBackend(TTSBackend):
 
 def is_mlx_available() -> bool:
     """Check if MLX backend is available (mlx-audio installed)."""
-    try:
-        from mlx_audio.tts.models.kokoro import KokoroPipeline
-
-        return True
-    except ImportError:
-        return False
+    return importlib.util.find_spec("mlx_audio") is not None

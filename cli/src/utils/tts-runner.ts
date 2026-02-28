@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import type { TTSConfig } from '../App.js';
+import type { PipelineModeOption, RecoveryMode, TTSConfig } from '../types/profile.js';
 import { resolvePythonRuntime } from './python-runtime.js';
 
 export interface WorkerStatus {
@@ -13,6 +13,18 @@ export interface WorkerStatus {
 
 export type ProcessingPhase = 'PARSING' | 'INFERENCE' | 'CONCATENATING' | 'EXPORTING' | 'DONE';
 export type ResolvedBackend = 'pytorch' | 'mlx' | 'mock';
+export type EffectivePipelineMode = Exclude<PipelineModeOption, 'auto'>;
+
+export interface RecoveryInfo {
+    attempt: number;
+    maxAttempts: number;
+    reason: string;
+    backend: TTSConfig['backend'];
+    useMPS: boolean;
+    pipelineMode: EffectivePipelineMode;
+    chunkChars: number;
+    workers: number;
+}
 
 export interface ProgressInfo {
     progress: number;
@@ -25,6 +37,7 @@ export interface ProgressInfo {
     totalChars?: number;     // Total characters in EPUB
     chapterCount?: number;   // Number of chapters in EPUB
     backendResolved?: ResolvedBackend;
+    recovery?: RecoveryInfo;
 }
 
 export interface ParserState {
@@ -50,7 +63,45 @@ interface JsonEvent {
     details?: string;
     current_chunk?: number;
     total_chunks?: number;
+    attempt?: number;
+    max_attempts?: number;
+    reason?: string;
+    backend?: TTSConfig['backend'];
+    use_mps?: boolean;
+    pipeline_mode?: EffectivePipelineMode;
+    chunk_chars?: number;
+    workers?: number;
 }
+
+const DEFAULT_PIPELINE_MODE: PipelineModeOption = 'auto';
+const DEFAULT_WORKERS = 1;
+const MAX_APPLE_RECOVERY_ATTEMPTS = 2;
+const RECOVERABLE_APPLE_FAILURE_MARKERS = [
+    'out of memory',
+    'mps',
+    'metal',
+    'mlx',
+    'killed',
+    'abort trap',
+    'segmentation fault',
+    'bus error',
+    'broken pipe',
+    'terminated',
+    'signal',
+];
+const NON_RECOVERABLE_FAILURE_MARKERS = [
+    'input epub not found',
+    'file not found',
+    'filenotfounderror',
+    'permission denied',
+    'ffmpeg not found',
+    'ffprobe not found',
+    'invalid epub',
+    'no readable text',
+    'no text chunks',
+    'python version',
+    'voice',
+];
 
 const PROCESSING_PHASES: ProcessingPhase[] = [
     'PARSING',
@@ -186,6 +237,38 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
                     totalChars: state.lastTotalChars,
                     chapterCount: state.lastChapterCount,
                     backendResolved: state.lastBackendResolved,
+                };
+            }
+
+            if (
+                event.type === 'recovery'
+                && typeof event.attempt === 'number'
+                && typeof event.max_attempts === 'number'
+                && typeof event.reason === 'string'
+                && typeof event.backend === 'string'
+                && typeof event.use_mps === 'boolean'
+                && typeof event.pipeline_mode === 'string'
+                && typeof event.chunk_chars === 'number'
+                && typeof event.workers === 'number'
+            ) {
+                return {
+                    progress: state.lastProgress,
+                    currentChunk: state.lastCurrentChunk,
+                    totalChunks: state.lastTotal,
+                    phase: state.lastPhase,
+                    totalChars: state.lastTotalChars,
+                    chapterCount: state.lastChapterCount,
+                    backendResolved: state.lastBackendResolved,
+                    recovery: {
+                        attempt: event.attempt,
+                        maxAttempts: event.max_attempts,
+                        reason: event.reason,
+                        backend: event.backend,
+                        useMPS: event.use_mps,
+                        pipelineMode: event.pipeline_mode,
+                        chunkChars: event.chunk_chars,
+                        workers: event.workers,
+                    },
                 };
             }
         } catch {
@@ -360,6 +443,15 @@ function parsePositiveInt(value: string | undefined): number | undefined {
     return parsed;
 }
 
+function isAppleSiliconHost(): boolean {
+    return process.env.AUDIOBOOK_FORCE_APPLE_SILICON === '1'
+        || (process.platform === 'darwin' && process.arch === 'arm64');
+}
+
+function getDefaultRecoveryMode(): RecoveryMode {
+    return isAppleSiliconHost() ? 'apple-balanced' : 'off';
+}
+
 function resolveThreadEnvOverrides(): { ompThreads: string; openBlasThreads: string } {
     const cpuCount = Math.max(1, os.cpus().length || 1);
     const defaultOmp = Math.min(Math.max(4, Math.floor(cpuCount * 0.5)), 8);
@@ -372,6 +464,122 @@ function resolveThreadEnvOverrides(): { ompThreads: string; openBlasThreads: str
         ompThreads: String(ompOverride ?? defaultOmp),
         openBlasThreads: String(openBlasOverride ?? defaultOpenBlas),
     };
+}
+
+class PythonProcessError extends Error {
+    code: number | null;
+    signal: NodeJS.Signals | null;
+
+    constructor(code: number | null, signal: NodeJS.Signals | null, stderrTail: string, logFile: string) {
+        const signalSuffix = signal ? ` (signal: ${signal})` : '';
+        super(`Python process exited with code ${code ?? 'null'}${signalSuffix}\n${stderrTail}\nLog file: ${logFile}`);
+        this.name = 'PythonProcessError';
+        this.code = code;
+        this.signal = signal;
+    }
+}
+
+function withInternalDefaults(config: TTSConfig): TTSConfig {
+    return {
+        ...config,
+        workers: config.workers || DEFAULT_WORKERS,
+        pipelineMode: config.pipelineMode ?? DEFAULT_PIPELINE_MODE,
+        recoveryMode: config.recoveryMode ?? getDefaultRecoveryMode(),
+    };
+}
+
+function isAppleSiliconRecoveryEnabled(config: TTSConfig): boolean {
+    return (
+        isAppleSiliconHost()
+        && config.recoveryMode !== 'off'
+        && config.backend !== 'mock'
+    );
+}
+
+function buildRecoveryInfo(config: TTSConfig, attempt: number, reason: string): RecoveryInfo {
+    return {
+        attempt,
+        maxAttempts: MAX_APPLE_RECOVERY_ATTEMPTS,
+        reason,
+        backend: config.backend,
+        useMPS: config.useMPS,
+        pipelineMode: (config.pipelineMode === 'overlap3' ? 'overlap3' : 'sequential'),
+        chunkChars: config.chunkChars,
+        workers: config.workers || DEFAULT_WORKERS,
+    };
+}
+
+function createAppleSafeFallbackConfig(config: TTSConfig): TTSConfig {
+    const fallbackChunkChars = config.backend === 'pytorch'
+        ? Math.min(config.chunkChars, 400)
+        : Math.min(config.chunkChars, 600);
+
+    return {
+        ...config,
+        backend: 'pytorch',
+        useMPS: false,
+        workers: DEFAULT_WORKERS,
+        pipelineMode: 'sequential',
+        chunkChars: fallbackChunkChars,
+    };
+}
+
+function executionProfileMatches(a: TTSConfig, b: TTSConfig): boolean {
+    return (
+        a.backend === b.backend
+        && a.useMPS === b.useMPS
+        && (a.workers || DEFAULT_WORKERS) === (b.workers || DEFAULT_WORKERS)
+        && (a.pipelineMode ?? DEFAULT_PIPELINE_MODE) === (b.pipelineMode ?? DEFAULT_PIPELINE_MODE)
+        && a.chunkChars === b.chunkChars
+    );
+}
+
+function describeRecoveryReason(error: PythonProcessError): string {
+    const errorLower = error.message.toLowerCase();
+
+    if (error.signal) {
+        return `backend exited via ${error.signal.toLowerCase()}`;
+    }
+    if (errorLower.includes('out of memory')) {
+        return 'apple runtime reported out-of-memory';
+    }
+    if (errorLower.includes('metal') || errorLower.includes('mps')) {
+        return 'apple gpu runtime became unstable';
+    }
+    if (errorLower.includes('mlx')) {
+        return 'mlx backend crashed';
+    }
+    return 'native backend crashed on Apple Silicon';
+}
+
+function isRecoverableAppleFailure(error: PythonProcessError): boolean {
+    const errorLower = error.message.toLowerCase();
+
+    if (NON_RECOVERABLE_FAILURE_MARKERS.some((marker) => errorLower.includes(marker))) {
+        return false;
+    }
+
+    if (error.signal) {
+        return true;
+    }
+
+    return RECOVERABLE_APPLE_FAILURE_MARKERS.some((marker) => errorLower.includes(marker));
+}
+
+function shouldRetryWithAppleFallback(error: unknown, currentConfig: TTSConfig, attempt: number): boolean {
+    if (!(error instanceof PythonProcessError)) {
+        return false;
+    }
+    if (attempt >= MAX_APPLE_RECOVERY_ATTEMPTS || !isAppleSiliconRecoveryEnabled(currentConfig)) {
+        return false;
+    }
+
+    const fallbackConfig = createAppleSafeFallbackConfig(currentConfig);
+    if (executionProfileMatches(currentConfig, fallbackConfig)) {
+        return false;
+    }
+
+    return isRecoverableAppleFailure(error);
 }
 
 function getRunLogPath(projectRoot: string): string {
@@ -387,7 +595,7 @@ function getRunLogPath(projectRoot: string): string {
     }
 }
 
-export function runTTS(
+function runTTSAttempt(
     inputPath: string,
     outputPath: string,
     config: TTSConfig,
@@ -406,7 +614,7 @@ export function runTTS(
             '--speed', config.speed.toString(),
             '--lang_code', config.langCode,
             '--chunk_chars', config.chunkChars.toString(),
-            '--workers', (config.workers || 2).toString(),
+            '--workers', (config.workers || DEFAULT_WORKERS).toString(),
             '--backend', config.backend || 'auto',
             '--format', config.outputFormat || 'mp3',
             '--bitrate', config.bitrate || '192k',
@@ -417,6 +625,7 @@ export function runTTS(
             ...(config.checkpointEnabled ? ['--checkpoint'] : []),
             ...(config.resume ? ['--resume'] : []),
             ...(config.noCheckpoint ? ['--no_checkpoint'] : []),
+            ...(config.pipelineMode && config.pipelineMode !== 'auto' ? ['--pipeline_mode', config.pipelineMode] : []),
             '--event_format', 'json',
             '--log_file', logFile,
             '--no_rich',
@@ -487,7 +696,7 @@ export function runTTS(
             reject(new Error(`Failed to start Python process: ${err.message}\nLog file: ${logFile}`));
         });
 
-        childProc.on('close', (code) => {
+        childProc.on('close', (code, signal) => {
             if (stdoutBuffer.trim()) {
                 emitParsedLine(stdoutBuffer.trim());
             }
@@ -495,7 +704,7 @@ export function runTTS(
                 emitParsedLine(stderrBuffer.trim());
             }
 
-            if (code === 0) {
+            if (code === 0 && !signal) {
                 onProgress({
                     progress: 100,
                     currentChunk: parserState.lastTotal,
@@ -507,8 +716,38 @@ export function runTTS(
                 });
                 resolve();
             } else {
-                reject(new Error(`Python process exited with code ${code}\n${stderrTail}\nLog file: ${logFile}`));
+                reject(new PythonProcessError(code, signal, stderrTail, logFile));
             }
         });
     });
+}
+
+export async function runTTS(
+    inputPath: string,
+    outputPath: string,
+    config: TTSConfig,
+    onProgress: (info: ProgressInfo) => void
+): Promise<void> {
+    const baseConfig = withInternalDefaults(config);
+    let attemptConfig = baseConfig;
+
+    for (let attempt = 1; attempt <= MAX_APPLE_RECOVERY_ATTEMPTS; attempt++) {
+        try {
+            await runTTSAttempt(inputPath, outputPath, attemptConfig, onProgress);
+            return;
+        } catch (error) {
+            if (!shouldRetryWithAppleFallback(error, attemptConfig, attempt)) {
+                throw error;
+            }
+
+            const fallbackConfig = createAppleSafeFallbackConfig(attemptConfig);
+            onProgress({
+                progress: 0,
+                currentChunk: 0,
+                totalChunks: 0,
+                recovery: buildRecoveryInfo(fallbackConfig, attempt + 1, describeRecoveryReason(error)),
+            });
+            attemptConfig = fallbackConfig;
+        }
+    }
 }

@@ -11,13 +11,18 @@ export default defineConfig({
         coverage: {
             provider: 'v8',
             reporter: ['text', 'html', 'lcov'],
-            include: ['src/utils/tts-runner.ts', 'src/utils/format.ts'],
+            include: [
+                'src/utils/**/*.ts',
+                'src/components/MetadataEditor.tsx',
+                'src/components/ResumeDialog.tsx',
+                'src/components/SetupRequired.tsx',
+            ],
             exclude: ['src/__tests__/**'],
             thresholds: {
-                statements: 60,
-                branches: 50,
-                functions: 60,
-                lines: 60,
+                statements: 85,
+                branches: 70,
+                functions: 85,
+                lines: 85,
             },
         },
     },

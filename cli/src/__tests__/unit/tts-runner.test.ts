@@ -1,7 +1,92 @@
-import { describe, it, expect } from 'vitest';
-import { createParserState, parseOutputLine } from '../../utils/tts-runner.js';
+import { EventEmitter } from 'events';
+import { spawn } from 'child_process';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-describe('tts-runner parser', () => {
+import type { TTSConfig } from '../../types/profile.js';
+
+vi.mock('../../utils/python-runtime.js', () => ({
+    resolvePythonRuntime: vi.fn(),
+}));
+
+import { resolvePythonRuntime } from '../../utils/python-runtime.js';
+import { createParserState, parseOutputLine, runTTS } from '../../utils/tts-runner.js';
+
+interface SpawnScript {
+    stdout?: string[];
+    stderr?: string[];
+    code?: number | null;
+    signal?: NodeJS.Signals | null;
+    error?: Error;
+}
+
+class MockStream extends EventEmitter {}
+
+class MockChildProcess extends EventEmitter {
+    stdout = new MockStream();
+    stderr = new MockStream();
+    kill = vi.fn();
+}
+
+function createMockChildProcess(script: SpawnScript): MockChildProcess {
+    const child = new MockChildProcess();
+
+    queueMicrotask(() => {
+        if (script.error) {
+            child.emit('error', script.error);
+            return;
+        }
+
+        for (const line of script.stdout ?? []) {
+            child.stdout.emit('data', Buffer.from(`${line}\n`));
+        }
+        for (const line of script.stderr ?? []) {
+            child.stderr.emit('data', Buffer.from(`${line}\n`));
+        }
+
+        child.emit('close', script.code ?? 0, script.signal ?? null);
+    });
+
+    return child;
+}
+
+function getArgValue(args: string[], flag: string): string | undefined {
+    const index = args.indexOf(flag);
+    return index === -1 ? undefined : args[index + 1];
+}
+
+const baseConfig: TTSConfig = {
+    voice: 'af_heart',
+    speed: 1,
+    langCode: 'a',
+    chunkChars: 900,
+    useMPS: true,
+    outputDir: null,
+    workers: 2,
+    backend: 'auto',
+    outputFormat: 'mp3',
+    bitrate: '192k',
+    normalize: false,
+    checkpointEnabled: false,
+    pipelineMode: 'auto',
+    recoveryMode: 'apple-balanced',
+};
+
+describe('tts-runner parser and recovery flow', () => {
+    beforeEach(() => {
+        process.env.AUDIOBOOK_FORCE_APPLE_SILICON = '1';
+        vi.mocked(resolvePythonRuntime).mockReturnValue({
+            projectRoot: '/tmp/audiobook-fast',
+            appPath: '/tmp/audiobook-fast/app.py',
+            pythonPath: 'python3',
+        });
+        vi.mocked(spawn).mockReset();
+    });
+
+    afterEach(() => {
+        delete process.env.AUDIOBOOK_FORCE_APPLE_SILICON;
+        vi.clearAllMocks();
+    });
+
     it('parses phase transitions and validates phase values', () => {
         const state = createParserState();
 
@@ -69,7 +154,7 @@ describe('tts-runner parser', () => {
         expect(heartbeat?.heartbeatTs).toBe(1704067200000);
     });
 
-    it('parses structured JSON events', () => {
+    it('parses structured JSON events including recovery payloads', () => {
         const state = createParserState();
 
         const phase = parseOutputLine('{"type":"phase","phase":"PARSING"}', state);
@@ -83,5 +168,68 @@ describe('tts-runner parser', () => {
 
         const timing = parseOutputLine('{"type":"timing","chunk_timing_ms":321}', state);
         expect(timing?.chunkTimingMs).toBe(321);
+
+        const recovery = parseOutputLine('{"type":"recovery","attempt":2,"max_attempts":2,"reason":"mlx backend crashed","backend":"pytorch","use_mps":false,"pipeline_mode":"sequential","chunk_chars":600,"workers":1}', state);
+        expect(recovery?.recovery).toEqual({
+            attempt: 2,
+            maxAttempts: 2,
+            reason: 'mlx backend crashed',
+            backend: 'pytorch',
+            useMPS: false,
+            pipelineMode: 'sequential',
+            chunkChars: 600,
+            workers: 1,
+        });
+    });
+
+    it('retries once with a safer Apple Silicon profile after a native crash', async () => {
+        vi.mocked(spawn)
+            .mockImplementationOnce(() => createMockChildProcess({
+                stderr: ['Metal out of memory', 'Abort trap: 6'],
+                code: 1,
+            }) as any)
+            .mockImplementationOnce(() => createMockChildProcess({
+                stdout: [
+                    '{"type":"phase","phase":"PARSING"}',
+                    '{"type":"progress","current_chunk":1,"total_chunks":1}',
+                ],
+                code: 0,
+            }) as any);
+
+        const updates: any[] = [];
+
+        await runTTS('book.epub', 'book.mp3', baseConfig, (info) => updates.push(info));
+
+        expect(spawn).toHaveBeenCalledTimes(2);
+
+        const retryArgs = vi.mocked(spawn).mock.calls[1][1] as string[];
+        const retryEnv = vi.mocked(spawn).mock.calls[1][2]?.env as Record<string, string> | undefined;
+
+        expect(getArgValue(retryArgs, '--backend')).toBe('pytorch');
+        expect(getArgValue(retryArgs, '--workers')).toBe('1');
+        expect(getArgValue(retryArgs, '--chunk_chars')).toBe('600');
+        expect(getArgValue(retryArgs, '--pipeline_mode')).toBe('sequential');
+        expect(retryEnv?.PYTORCH_ENABLE_MPS_FALLBACK).toBeUndefined();
+
+        expect(updates.some((update) => update.recovery)).toBe(true);
+        expect(updates.find((update) => update.recovery)?.recovery).toMatchObject({
+            attempt: 2,
+            backend: 'pytorch',
+            useMPS: false,
+            pipelineMode: 'sequential',
+            chunkChars: 600,
+            workers: 1,
+        });
+        expect(updates[updates.length - 1]?.phase).toBe('DONE');
+    });
+
+    it('does not retry when the failure is not recoverable', async () => {
+        vi.mocked(spawn).mockImplementationOnce(() => createMockChildProcess({
+            stderr: ['Input EPUB not found'],
+            code: 1,
+        }) as any);
+
+        await expect(runTTS('missing.epub', 'book.mp3', baseConfig, () => undefined)).rejects.toThrow('Input EPUB not found');
+        expect(spawn).toHaveBeenCalledTimes(1);
     });
 });

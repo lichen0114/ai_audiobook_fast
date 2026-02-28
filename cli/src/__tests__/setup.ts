@@ -4,6 +4,7 @@ import { vi } from 'vitest';
 vi.mock('child_process', () => ({
     spawn: vi.fn(),
     spawnSync: vi.fn(),
+    execSync: vi.fn(),
     exec: vi.fn(),
 }));
 

@@ -1,4 +1,5 @@
 import argparse
+import gc
 from contextlib import nullcontext
 import importlib.util
 import json
@@ -17,8 +18,17 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple
 
 import numpy as np
 from bs4 import BeautifulSoup
-import ebooklib
-from ebooklib import epub
+try:
+    import ebooklib
+    from ebooklib import epub
+except ImportError:  # pragma: no cover - exercised via fallback tests
+    class _EbooklibFallback:
+        ITEM_COVER = "ITEM_COVER"
+        ITEM_IMAGE = "ITEM_IMAGE"
+        ITEM_DOCUMENT = "ITEM_DOCUMENT"
+
+    ebooklib = _EbooklibFallback()
+    epub = None
 from pydub import AudioSegment
 from rich.progress import (
     BarColumn,
@@ -56,14 +66,7 @@ _AUTO_BACKEND_CACHE: Optional[str] = None
 
 
 def default_pipeline_mode(output_format: str, use_checkpoint: bool) -> str:
-    """Choose pipeline mode based on platform and output path."""
-    if (
-        output_format == "mp3"
-        and not use_checkpoint
-        and sys.platform == "darwin"
-        and platform.machine() == "arm64"
-    ):
-        return "overlap3"
+    """Choose the safest default pipeline mode."""
     return "sequential"
 
 
@@ -234,8 +237,16 @@ def _clean_text(text: str) -> str:
     return text
 
 
+def _require_epub_support() -> None:
+    if epub is None:
+        raise ImportError(
+            "ebooklib is required for EPUB parsing. Install with: pip install ebooklib"
+        )
+
+
 def extract_epub_metadata(epub_path: str) -> BookMetadata:
     """Extract title, author, and cover image from EPUB file."""
+    _require_epub_support()
     book = epub.read_epub(epub_path)
 
     # Extract title
@@ -286,6 +297,7 @@ def extract_epub_metadata(epub_path: str) -> BookMetadata:
 
 
 def extract_epub_text(epub_path: str) -> List[Tuple[str, str]]:
+    _require_epub_support()
     book = epub.read_epub(epub_path)
     chapters = []
 
@@ -734,6 +746,61 @@ def close_mp3_export_stream(proc: subprocess.Popen) -> None:
         raise RuntimeError(f"ffmpeg failed: {err}")
 
 
+def _cleanup_backend(backend: Optional[TTSBackend]) -> Optional[BaseException]:
+    """Best-effort backend finalizer that never prevents later cleanup."""
+    if backend is None:
+        return None
+
+    try:
+        backend.cleanup()
+    except BaseException as exc:  # pragma: no cover - asserted via main() behavior
+        return exc
+    return None
+
+
+def _cleanup_ffmpeg_process(
+    proc: Optional[subprocess.Popen],
+) -> Optional[BaseException]:
+    """Best-effort ffmpeg process cleanup for success and failure paths."""
+    if proc is None:
+        return None
+
+    try:
+        try:
+            if proc.stdin is not None:
+                proc.stdin.close()
+        except (OSError, ValueError):
+            pass
+
+        if proc.poll() is None:
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+        return None
+    except BaseException as exc:  # pragma: no cover - asserted via main() behavior
+        return exc
+
+
+def _cleanup_spool_path(spool_path: Optional[str]) -> Optional[BaseException]:
+    """Best-effort spool file cleanup."""
+    if not spool_path:
+        return None
+
+    try:
+        if os.path.exists(spool_path):
+            os.remove(spool_path)
+    except FileNotFoundError:
+        return None
+    except BaseException as exc:  # pragma: no cover - asserted via main() behavior
+        return exc
+    return None
+
+
 def export_pcm_file_to_m4b(
     pcm_path: str,
     output_path: str,
@@ -1131,6 +1198,7 @@ def main() -> None:
         mp3_export_proc: Optional[subprocess.Popen] = None
         should_cleanup_checkpoint = False
         sample_rate = DEFAULT_SAMPLE_RATE
+        main_error: Optional[BaseException] = None
 
         try:
             # Initialize the TTS backend
@@ -1560,29 +1628,35 @@ def main() -> None:
             events.info(f"Output: {args.output}")
             events.info(f"Chunks: {total_chunks}")
             events.info(f"Average chunk time: {avg_time:.2f}s")
+        except BaseException as exc:
+            main_error = exc
+            raise
         finally:
-            if backend is not None:
-                backend.cleanup()
-            if mp3_export_proc is not None and mp3_export_proc.poll() is None:
-                try:
-                    if mp3_export_proc.stdin is not None:
-                        mp3_export_proc.stdin.close()
-                except OSError:
-                    pass
-                try:
-                    mp3_export_proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    mp3_export_proc.kill()
-            if spool_path and os.path.exists(spool_path):
-                try:
-                    os.remove(spool_path)
-                except OSError:
-                    pass
-    except Exception as exc:
-        events.error(str(exc))
+            cleanup_error: Optional[BaseException] = None
+
+            backend_cleanup_error = _cleanup_backend(backend)
+            if cleanup_error is None and backend_cleanup_error is not None:
+                cleanup_error = backend_cleanup_error
+
+            ffmpeg_cleanup_error = _cleanup_ffmpeg_process(mp3_export_proc)
+            if cleanup_error is None and ffmpeg_cleanup_error is not None:
+                cleanup_error = ffmpeg_cleanup_error
+
+            spool_cleanup_error = _cleanup_spool_path(spool_path)
+            if cleanup_error is None and spool_cleanup_error is not None:
+                cleanup_error = spool_cleanup_error
+
+            if main_error is None and cleanup_error is not None:
+                raise cleanup_error
+    except BaseException as exc:
+        if isinstance(exc, Exception):
+            events.error(str(exc))
         raise
     finally:
-        events.close()
+        try:
+            gc.collect()
+        finally:
+            events.close()
 
 
 if __name__ == "__main__":

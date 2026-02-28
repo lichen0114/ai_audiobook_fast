@@ -1,0 +1,40 @@
+{"type": "metadata", "ts_ms": 1771718697973, "job_id": "audiobook-runtts-1771718696839.mp3", "key": "backend_resolved", "value": "mock"}
+{"type": "metadata", "ts_ms": 1771718697973, "job_id": "audiobook-runtts-1771718696839.mp3", "key": "pipeline_mode", "value": "sequential"}
+{"type": "phase", "ts_ms": 1771718697973, "job_id": "audiobook-runtts-1771718696839.mp3", "phase": "PARSING"}
+{"type": "metadata", "ts_ms": 1771718697980, "job_id": "audiobook-runtts-1771718696839.mp3", "key": "total_chars", "value": 517}
+{"type": "metadata", "ts_ms": 1771718697980, "job_id": "audiobook-runtts-1771718696839.mp3", "key": "chapter_count", "value": 3}
+{"type": "log", "ts_ms": 1771718697981, "job_id": "audiobook-runtts-1771718696839.mp3", "level": "info", "message": "Processing 6 chunks with mock backend (sequential pipeline + disk spooling)"}
+{"type": "phase", "ts_ms": 1771718697981, "job_id": "audiobook-runtts-1771718696839.mp3", "phase": "INFERENCE"}
+{"type": "worker", "ts_ms": 1771718697981, "job_id": "audiobook-runtts-1771718696839.mp3", "id": 0, "status": "INFER", "details": "Chunk 1/6"}
+{"type": "checkpoint", "ts_ms": 1771718697982, "job_id": "audiobook-runtts-1771718696839.mp3", "code": "SAVED", "detail": 0}
+{"type": "timing", "ts_ms": 1771718697982, "job_id": "audiobook-runtts-1771718696839.mp3", "chunk_idx": 0, "chunk_timing_ms": 0, "stage": "infer"}
+{"type": "progress", "ts_ms": 1771718697982, "job_id": "audiobook-runtts-1771718696839.mp3", "current_chunk": 1, "total_chunks": 6}
+{"type": "worker", "ts_ms": 1771718697982, "job_id": "audiobook-runtts-1771718696839.mp3", "id": 0, "status": "INFER", "details": "Chunk 2/6"}
+{"type": "checkpoint", "ts_ms": 1771718697983, "job_id": "audiobook-runtts-1771718696839.mp3", "code": "SAVED", "detail": 1}
+{"type": "timing", "ts_ms": 1771718697983, "job_id": "audiobook-runtts-1771718696839.mp3", "chunk_idx": 1, "chunk_timing_ms": 0, "stage": "infer"}
+{"type": "progress", "ts_ms": 1771718697983, "job_id": "audiobook-runtts-1771718696839.mp3", "current_chunk": 2, "total_chunks": 6}
+{"type": "worker", "ts_ms": 1771718697983, "job_id": "audiobook-runtts-1771718696839.mp3", "id": 0, "status": "INFER", "details": "Chunk 3/6"}
+{"type": "checkpoint", "ts_ms": 1771718697983, "job_id": "audiobook-runtts-1771718696839.mp3", "code": "SAVED", "detail": 2}
+{"type": "timing", "ts_ms": 1771718697983, "job_id": "audiobook-runtts-1771718696839.mp3", "chunk_idx": 2, "chunk_timing_ms": 0, "stage": "infer"}
+{"type": "progress", "ts_ms": 1771718697983, "job_id": "audiobook-runtts-1771718696839.mp3", "current_chunk": 3, "total_chunks": 6}
+{"type": "worker", "ts_ms": 1771718697983, "job_id": "audiobook-runtts-1771718696839.mp3", "id": 0, "status": "INFER", "details": "Chunk 4/6"}
+{"type": "checkpoint", "ts_ms": 1771718697984, "job_id": "audiobook-runtts-1771718696839.mp3", "code": "SAVED", "detail": 3}
+{"type": "timing", "ts_ms": 1771718697984, "job_id": "audiobook-runtts-1771718696839.mp3", "chunk_idx": 3, "chunk_timing_ms": 0, "stage": "infer"}
+{"type": "progress", "ts_ms": 1771718697984, "job_id": "audiobook-runtts-1771718696839.mp3", "current_chunk": 4, "total_chunks": 6}
+{"type": "worker", "ts_ms": 1771718697984, "job_id": "audiobook-runtts-1771718696839.mp3", "id": 0, "status": "INFER", "details": "Chunk 5/6"}
+{"type": "checkpoint", "ts_ms": 1771718697984, "job_id": "audiobook-runtts-1771718696839.mp3", "code": "SAVED", "detail": 4}
+{"type": "timing", "ts_ms": 1771718697984, "job_id": "audiobook-runtts-1771718696839.mp3", "chunk_idx": 4, "chunk_timing_ms": 0, "stage": "infer"}
+{"type": "progress", "ts_ms": 1771718697984, "job_id": "audiobook-runtts-1771718696839.mp3", "current_chunk": 5, "total_chunks": 6}
+{"type": "worker", "ts_ms": 1771718697984, "job_id": "audiobook-runtts-1771718696839.mp3", "id": 0, "status": "INFER", "details": "Chunk 6/6"}
+{"type": "checkpoint", "ts_ms": 1771718697985, "job_id": "audiobook-runtts-1771718696839.mp3", "code": "SAVED", "detail": 5}
+{"type": "timing", "ts_ms": 1771718697985, "job_id": "audiobook-runtts-1771718696839.mp3", "chunk_idx": 5, "chunk_timing_ms": 0, "stage": "infer"}
+{"type": "progress", "ts_ms": 1771718697985, "job_id": "audiobook-runtts-1771718696839.mp3", "current_chunk": 6, "total_chunks": 6}
+{"type": "phase", "ts_ms": 1771718697985, "job_id": "audiobook-runtts-1771718696839.mp3", "phase": "CONCATENATING"}
+{"type": "log", "ts_ms": 1771718697985, "job_id": "audiobook-runtts-1771718696839.mp3", "level": "info", "message": "Concatenating audio segments..."}
+{"type": "phase", "ts_ms": 1771718697985, "job_id": "audiobook-runtts-1771718696839.mp3", "phase": "EXPORTING"}
+{"type": "checkpoint", "ts_ms": 1771718698092, "job_id": "audiobook-runtts-1771718696839.mp3", "code": "CLEANED"}
+{"type": "done", "ts_ms": 1771718698092, "job_id": "audiobook-runtts-1771718696839.mp3", "output": "/var/folders/mv/qyy1hbrs3t159vljv8rxsprc0000gq/T/audiobook-runtts-1771718696839.mp3", "chunks": 6}
+{"type": "log", "ts_ms": 1771718698092, "job_id": "audiobook-runtts-1771718696839.mp3", "level": "info", "message": "Done."}
+{"type": "log", "ts_ms": 1771718698092, "job_id": "audiobook-runtts-1771718696839.mp3", "level": "info", "message": "Output: /var/folders/mv/qyy1hbrs3t159vljv8rxsprc0000gq/T/audiobook-runtts-1771718696839.mp3"}
+{"type": "log", "ts_ms": 1771718698092, "job_id": "audiobook-runtts-1771718696839.mp3", "level": "info", "message": "Chunks: 6"}
+{"type": "log", "ts_ms": 1771718698092, "job_id": "audiobook-runtts-1771718696839.mp3", "level": "info", "message": "Average chunk time: 0.00s"}

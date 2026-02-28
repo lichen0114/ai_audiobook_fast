@@ -1,19 +1,20 @@
 import { spawn } from 'child_process';
 
-export function openFolder(folderPath: string): void {
-    let command = '';
-    let args: string[] = [];
-
-    if (process.platform === 'darwin') {
-        command = 'open';
-        args = [folderPath];
-    } else if (process.platform === 'win32') {
-        command = 'cmd';
-        args = ['/c', 'start', '', folderPath];
-    } else {
-        command = 'xdg-open';
-        args = [folderPath];
+export function getOpenFolderCommand(
+    folderPath: string,
+    platform: NodeJS.Platform = process.platform
+): { command: string; args: string[] } {
+    if (platform === 'darwin') {
+        return { command: 'open', args: [folderPath] };
     }
+    if (platform === 'win32') {
+        return { command: 'cmd', args: ['/c', 'start', '', folderPath] };
+    }
+    return { command: 'xdg-open', args: [folderPath] };
+}
+
+export function openFolder(folderPath: string): void {
+    const { command, args } = getOpenFolderCommand(folderPath);
 
     const child = spawn(command, args, {
         detached: true,
