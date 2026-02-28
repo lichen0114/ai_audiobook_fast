@@ -109,6 +109,20 @@ describe('tts-runner parser and recovery flow', () => {
         expect(chapterUpdate?.chapterCount).toBe(12);
     });
 
+    it('parses parse-progress messages and keeps parser state', () => {
+        const state = createParserState();
+
+        const parseUpdate = parseOutputLine('PARSE_PROGRESS:3/10:2', state);
+        expect(parseUpdate?.parseCurrentItem).toBe(3);
+        expect(parseUpdate?.parseTotalItems).toBe(10);
+        expect(parseUpdate?.parseChapterCount).toBe(2);
+
+        const phase = parseOutputLine('PHASE:INFERENCE', state);
+        expect(phase?.parseCurrentItem).toBe(3);
+        expect(phase?.parseTotalItems).toBe(10);
+        expect(phase?.parseChapterCount).toBe(2);
+    });
+
     it('parses worker and timing messages', () => {
         const state = createParserState();
 
@@ -159,6 +173,11 @@ describe('tts-runner parser and recovery flow', () => {
 
         const phase = parseOutputLine('{"type":"phase","phase":"PARSING"}', state);
         expect(phase?.phase).toBe('PARSING');
+
+        const parseProgress = parseOutputLine('{"type":"parse_progress","current_item":4,"total_items":12,"current_chapter_count":3}', state);
+        expect(parseProgress?.parseCurrentItem).toBe(4);
+        expect(parseProgress?.parseTotalItems).toBe(12);
+        expect(parseProgress?.parseChapterCount).toBe(3);
 
         const metadata = parseOutputLine('{"type":"metadata","key":"backend_resolved","value":"mock"}', state);
         expect(metadata?.backendResolved).toBe('mock');

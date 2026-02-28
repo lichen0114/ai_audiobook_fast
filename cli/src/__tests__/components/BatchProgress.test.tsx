@@ -368,6 +368,55 @@ RuntimeError: Something went wrong`;
     });
 
     describe('batch flow with mock data', () => {
+        it('shows parse progress while the backend is still parsing', async () => {
+            vi.useFakeTimers();
+
+            const jobs = [createFileJob('1', '/tmp/book-one.epub')];
+            const onComplete = vi.fn();
+
+            let releaseRun: (() => void) | undefined;
+            const runGate = new Promise<void>((resolve) => {
+                releaseRun = resolve;
+            });
+
+            vi.mocked(runTTS).mockImplementationOnce(async (_input, _output, _config, onProgress) => {
+                onProgress({ progress: 0, currentChunk: 0, totalChunks: 0, phase: 'PARSING' });
+                onProgress({
+                    progress: 0,
+                    currentChunk: 0,
+                    totalChunks: 0,
+                    phase: 'PARSING',
+                    parseCurrentItem: 2,
+                    parseTotalItems: 4,
+                    parseChapterCount: 1,
+                });
+                await runGate;
+                onProgress({ progress: 100, currentChunk: 1, totalChunks: 1, phase: 'DONE' });
+            });
+
+            const { lastFrame } = render(
+                <BatchProgressHarness
+                    initialFiles={jobs}
+                    onComplete={onComplete}
+                    onFilesChange={() => undefined}
+                />
+            );
+
+            await advanceUi();
+
+            const frame = lastFrame() ?? '';
+            expect(frame).toContain('Document:');
+            expect(frame).toContain('2');
+            expect(frame).toContain('4');
+            expect(frame).toContain('Chapters:');
+            expect(frame).toContain('50%');
+
+            releaseRun?.();
+            await advanceUi(600);
+
+            expect(onComplete).toHaveBeenCalledOnce();
+        });
+
         it('processes multiple books sequentially and shows recovery status for a recovered first file', async () => {
             vi.useFakeTimers();
 

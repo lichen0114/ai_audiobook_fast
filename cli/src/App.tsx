@@ -9,6 +9,7 @@ import { BatchProgress } from './components/BatchProgress.js';
 import { WelcomeScreen } from './components/WelcomeScreen.js';
 import { SetupRequired } from './components/SetupRequired.js';
 import { KeyboardHint, DONE_HINTS, PROCESSING_HINTS } from './components/KeyboardHint.js';
+import type { FileJob, TTSConfig } from './types/profile.js';
 import { runPreflightChecks, quickCheck, type PreflightCheck } from './utils/preflight.js';
 import { extractMetadata } from './utils/metadata.js';
 import { checkCheckpoint, deleteCheckpoint } from './utils/checkpoint.js';
@@ -18,44 +19,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 export type Screen = 'checking' | 'setup-required' | 'welcome' | 'files' | 'config' | 'metadata' | 'resume' | 'processing' | 'done';
-
-export interface TTSConfig {
-    voice: string;
-    speed: number;
-    langCode: string;
-    chunkChars: number;
-    useMPS: boolean;
-    outputDir: string | null; // null means same directory as input
-    workers: number; // Number of parallel workers for audio encoding
-    backend: 'auto' | 'pytorch' | 'mlx' | 'mock'; // TTS backend to use
-    outputFormat: 'mp3' | 'm4b'; // Output format
-    bitrate: '128k' | '192k' | '320k'; // Audio bitrate
-    normalize: boolean; // Apply loudness normalization
-    checkpointEnabled: boolean; // Enable checkpoint writes for resume support
-    // Metadata overrides for M4B
-    metadataTitle?: string;
-    metadataAuthor?: string;
-    metadataCover?: string;
-    // Checkpoint/resume options
-    resume?: boolean; // Resume from checkpoint if available
-    noCheckpoint?: boolean; // Disable checkpoint saving
-}
-
-export interface FileJob {
-    id: string;
-    inputPath: string;
-    outputPath: string;
-    status: 'pending' | 'processing' | 'done' | 'error';
-    progress: number;
-    currentChunk?: number;
-    totalChunks?: number;
-    error?: string;
-    outputSize?: number; // in bytes
-    processingTime?: number; // in ms
-    totalChars?: number; // total characters processed
-    avgChunkTimeMs?: number; // average chunk time in ms
-    startTime?: number; // processing start timestamp
-}
 
 // Optimal chunk sizes per backend based on benchmarks
 // MLX: 900 chars = 180 chars/s (+11% vs 1200)

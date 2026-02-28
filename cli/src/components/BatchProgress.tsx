@@ -253,6 +253,12 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
     const totalCharsRef = React.useRef<number | undefined>(undefined);
     const [recoveryInfo, setRecoveryInfo] = useState<ProgressInfo['recovery']>(undefined);
     const recoveryInfoRef = React.useRef<ProgressInfo['recovery']>(undefined);
+    const [parseCurrentItem, setParseCurrentItem] = useState<number | undefined>(undefined);
+    const parseCurrentItemRef = React.useRef<number | undefined>(undefined);
+    const [parseTotalItems, setParseTotalItems] = useState<number | undefined>(undefined);
+    const parseTotalItemsRef = React.useRef<number | undefined>(undefined);
+    const [parseChapterCount, setParseChapterCount] = useState<number | undefined>(undefined);
+    const parseChapterCountRef = React.useRef<number | undefined>(undefined);
 
     // Stall detection
     const [isStalled, setIsStalled] = useState(false);
@@ -283,6 +289,7 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
     const hasTimingUpdate = React.useRef(false);
     const hasCharsUpdate = React.useRef(false);
     const hasRecoveryUpdate = React.useRef(false);
+    const hasParseUpdate = React.useRef(false);
 
     const [eta, setEta] = useState<string>('Calculating...');
     const etaRef = React.useRef<string>('Calculating...');
@@ -325,14 +332,21 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                 hasRecoveryUpdate.current = false;
             }
 
+            if (hasParseUpdate.current) {
+                setParseCurrentItem(parseCurrentItemRef.current);
+                setParseTotalItems(parseTotalItemsRef.current);
+                setParseChapterCount(parseChapterCountRef.current);
+                hasParseUpdate.current = false;
+            }
+
             // Sync ETA (always sync simple string, low cost)
             setEta(etaRef.current);
 
             // Update elapsed time
             setElapsedTime(Date.now() - startTime);
 
-            // Check for stall (only during INFERENCE phase)
-            if (currentPhaseRef.current === 'INFERENCE') {
+            // Check for stall during active processing phases.
+            if (currentPhaseRef.current === 'PARSING' || currentPhaseRef.current === 'INFERENCE') {
                 const timeSinceHeartbeat = Date.now() - lastHeartbeatRef.current;
                 setIsStalled(timeSinceHeartbeat > STALL_THRESHOLD_MS);
             } else {
@@ -357,6 +371,10 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                 hasWorkerUpdates.current = true; // Force update
                 recoveryInfoRef.current = undefined;
                 hasRecoveryUpdate.current = true;
+                parseCurrentItemRef.current = undefined;
+                parseTotalItemsRef.current = undefined;
+                parseChapterCountRef.current = undefined;
+                hasParseUpdate.current = true;
                 etaRef.current = 'Calculating...';
 
                 // Update status to processing
@@ -386,6 +404,10 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                                 hasTimingUpdate.current = true;
                                 totalCharsRef.current = undefined;
                                 hasCharsUpdate.current = true;
+                                parseCurrentItemRef.current = undefined;
+                                parseTotalItemsRef.current = undefined;
+                                parseChapterCountRef.current = undefined;
+                                hasParseUpdate.current = true;
                                 etaRef.current = 'Recalibrating...';
                                 lastHeartbeatRef.current = Date.now();
 
@@ -407,6 +429,16 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                                 hasPhaseUpdate.current = true;
                                 // Reset heartbeat timer on phase change
                                 lastHeartbeatRef.current = Date.now();
+
+                                if (progressInfo.phase === 'INFERENCE') {
+                                    const currentFiles = [...filesRef.current];
+                                    currentFiles[i] = {
+                                        ...currentFiles[i],
+                                        progress: 0,
+                                    };
+                                    filesRef.current = currentFiles;
+                                    hasFileUpdates.current = true;
+                                }
                             }
 
                             // Update heartbeat timestamp
@@ -430,6 +462,30 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                             if (progressInfo.totalChars !== undefined && progressInfo.totalChars !== totalCharsRef.current) {
                                 totalCharsRef.current = progressInfo.totalChars;
                                 hasCharsUpdate.current = true;
+                            }
+
+                            if (
+                                progressInfo.parseCurrentItem !== undefined
+                                && progressInfo.parseTotalItems !== undefined
+                                && progressInfo.parseChapterCount !== undefined
+                                && (progressInfo.phase === 'PARSING' || currentPhaseRef.current === 'PARSING')
+                            ) {
+                                parseCurrentItemRef.current = progressInfo.parseCurrentItem;
+                                parseTotalItemsRef.current = progressInfo.parseTotalItems;
+                                parseChapterCountRef.current = progressInfo.parseChapterCount;
+                                hasParseUpdate.current = true;
+                                lastHeartbeatRef.current = Date.now();
+
+                                const parseProgress = Math.round(
+                                    (progressInfo.parseCurrentItem / progressInfo.parseTotalItems) * 100
+                                );
+                                const currentFiles = [...filesRef.current];
+                                currentFiles[i] = {
+                                    ...currentFiles[i],
+                                    progress: parseProgress,
+                                };
+                                filesRef.current = currentFiles;
+                                hasFileUpdates.current = true;
                             }
 
                             // Update Worker Status Ref (No re-render)
@@ -502,6 +558,10 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                     currentPhaseRef.current = undefined;
                     recoveryInfoRef.current = undefined;
                     hasRecoveryUpdate.current = true;
+                    parseCurrentItemRef.current = undefined;
+                    parseTotalItemsRef.current = undefined;
+                    parseChapterCountRef.current = undefined;
+                    hasParseUpdate.current = true;
                 } catch (error) {
                     // Mark as error with user-friendly message
                     const rawError = error instanceof Error ? error.message : 'Unknown error';
@@ -525,6 +585,10 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                     currentPhaseRef.current = undefined;
                     recoveryInfoRef.current = undefined;
                     hasRecoveryUpdate.current = true;
+                    parseCurrentItemRef.current = undefined;
+                    parseTotalItemsRef.current = undefined;
+                    parseChapterCountRef.current = undefined;
+                    hasParseUpdate.current = true;
                 }
             }
 
@@ -535,6 +599,13 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
     }, []);
 
     const currentFile = files[currentIndex];
+    const parseProgress = (
+        parseCurrentItem !== undefined
+        && parseTotalItems !== undefined
+        && parseTotalItems > 0
+    )
+        ? Math.round((parseCurrentItem / parseTotalItems) * 100)
+        : undefined;
 
     // Worker Grid Component
     const renderWorkers = () => {
@@ -618,6 +689,19 @@ export function BatchProgress({ files, setFiles, config, onComplete }: BatchProg
                         <Text dimColor>Currently Processing: </Text>
                         <Text bold color="white">{path.basename(currentFile.inputPath)}</Text>
                     </Box>
+                    {currentPhase === 'PARSING' && parseCurrentItem !== undefined && parseTotalItems !== undefined && (
+                        <Box marginTop={1}>
+                            <Text dimColor>Document: </Text>
+                            <Text bold color="yellow">{parseCurrentItem}</Text>
+                            <Text dimColor>/</Text>
+                            <Text>{parseTotalItems}</Text>
+                            {parseProgress !== undefined && (
+                                <Text dimColor> ({parseProgress}%)</Text>
+                            )}
+                            <Text dimColor>  •  Chapters: </Text>
+                            <Text color="cyan">{parseChapterCount ?? 0}</Text>
+                        </Box>
+                    )}
                     {currentFile.currentChunk !== undefined && currentFile.totalChunks !== undefined && (
                         <Box marginTop={1}>
                             <Text dimColor>Chunk: </Text>

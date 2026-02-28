@@ -157,6 +157,7 @@ class TestEventEmitter:
         emitter = app.EventEmitter(event_format="text", job_id="job-1", log_file=str(log_path))
 
         emitter.emit("phase", phase="PARSING")
+        emitter.emit("parse_progress", current_item=1, total_items=3, current_chapter_count=1)
         emitter.emit("progress", current_chunk=2, total_chunks=5)
         emitter.emit("checkpoint", code="FOUND", detail="5:2")
         emitter.warn("careful")
@@ -166,6 +167,7 @@ class TestEventEmitter:
 
         captured = capsys.readouterr()
         assert "PHASE:PARSING" in captured.out
+        assert "PARSE_PROGRESS:1/3:1" in captured.out
         assert "PROGRESS:2/5 chunks" in captured.out
         assert "CHECKPOINT:FOUND:5:2" in captured.out
         assert "DONE" in captured.out
@@ -255,6 +257,10 @@ class TestMainCleanupBehavior:
     def test_main_cleans_backend_ffmpeg_and_gc_on_failure(self, monkeypatch, tmp_path):
         args = build_main_args(tmp_path)
         events = MagicMock()
+        parsed_epub = app.ParsedEpub(
+            metadata=app.BookMetadata(title="Title", author="Author"),
+            chapters=[("Chapter 1", "Hello world")],
+        )
         backend = SimpleNamespace(
             name="mock",
             sample_rate=24000,
@@ -269,7 +275,7 @@ class TestMainCleanupBehavior:
         monkeypatch.setattr(app, "parse_args", lambda: args)
         monkeypatch.setattr(app, "EventEmitter", lambda **kwargs: events)
         monkeypatch.setattr(app, "resolve_backend", lambda _: "mock")
-        monkeypatch.setattr(app, "extract_epub_text", lambda _: [("Chapter 1", "Hello world")])
+        monkeypatch.setattr(app, "parse_epub", lambda *args, **kwargs: parsed_epub)
         monkeypatch.setattr(
             app,
             "split_text_to_chunks",
@@ -292,6 +298,10 @@ class TestMainCleanupBehavior:
     def test_main_cleans_spool_file_and_gc_on_export_failure(self, monkeypatch, tmp_path):
         args = build_main_args(tmp_path, checkpoint=True)
         events = MagicMock()
+        parsed_epub = app.ParsedEpub(
+            metadata=app.BookMetadata(title="Title", author="Author"),
+            chapters=[("Chapter 1", "Hello world")],
+        )
         backend = SimpleNamespace(
             name="mock",
             sample_rate=24000,
@@ -314,7 +324,7 @@ class TestMainCleanupBehavior:
         monkeypatch.setattr(app, "parse_args", lambda: args)
         monkeypatch.setattr(app, "EventEmitter", lambda **kwargs: events)
         monkeypatch.setattr(app, "resolve_backend", lambda _: "mock")
-        monkeypatch.setattr(app, "extract_epub_text", lambda _: [("Chapter 1", "Hello world")])
+        monkeypatch.setattr(app, "parse_epub", lambda *args, **kwargs: parsed_epub)
         monkeypatch.setattr(
             app,
             "split_text_to_chunks",
@@ -340,6 +350,51 @@ class TestMainCleanupBehavior:
         gc_collect.assert_called_once()
         events.error.assert_called_once_with("export failed")
         events.close.assert_called_once()
+
+    def test_main_reads_epub_once_for_m4b(self, monkeypatch, tmp_path):
+        args = build_main_args(
+            tmp_path,
+            output=str(tmp_path / "output.m4b"),
+            format="m4b",
+        )
+        events = MagicMock()
+        backend = SimpleNamespace(
+            name="mock",
+            sample_rate=24000,
+            initialize=MagicMock(),
+            generate=MagicMock(return_value=[np.array([0.25, -0.25], dtype=np.float32)]),
+            cleanup=MagicMock(),
+        )
+        mock_book = MagicMock()
+        mock_doc = MagicMock()
+        mock_doc.get_content.return_value = (
+            b"<html><head><title>Chapter 1</title></head><body><p>Hello world.</p></body></html>"
+        )
+        mock_book.get_metadata.side_effect = lambda ns, key: {
+            ("DC", "title"): [("Test Book", {})],
+            ("DC", "creator"): [("Test Author", {})],
+            ("OPF", "cover"): [],
+        }.get((ns, key), [])
+        mock_book.get_items.return_value = []
+        mock_book.get_items_of_type.side_effect = lambda item_type: {
+            app.ebooklib.ITEM_DOCUMENT: [mock_doc],
+            app.ebooklib.ITEM_COVER: [],
+            app.ebooklib.ITEM_IMAGE: [],
+        }.get(item_type, [])
+        mock_epub = MagicMock()
+        mock_epub.read_epub.return_value = mock_book
+
+        monkeypatch.setattr(app.sys, "version_info", (3, 12, 0))
+        monkeypatch.setattr(app, "parse_args", lambda: args)
+        monkeypatch.setattr(app, "EventEmitter", lambda **kwargs: events)
+        monkeypatch.setattr(app, "resolve_backend", lambda _: "mock")
+        monkeypatch.setattr(app, "create_backend", lambda _: backend)
+        monkeypatch.setattr(app, "export_pcm_file_to_m4b", MagicMock())
+        monkeypatch.setattr(app, "epub", mock_epub)
+
+        app.main()
+
+        mock_epub.read_epub.assert_called_once_with(str(args.input))
 
 
 @pytest.mark.unit

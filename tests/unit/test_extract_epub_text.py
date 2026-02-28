@@ -7,7 +7,8 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from app import extract_epub_text
+import app
+from app import extract_epub_text, parse_epub
 
 
 @pytest.mark.unit
@@ -130,6 +131,50 @@ class TestExtractEpubText:
             assert "Heading" in text
             assert "bold" in text
             assert "italic" in text
+
+    def test_parse_epub_reports_document_progress(self):
+        """Shared parser should report document-level progress."""
+        with patch("app.epub") as mock_epub:
+            mock_book = MagicMock()
+            mock_item1 = MagicMock()
+            mock_item1.get_content.return_value = b"""
+            <html>
+                <head><title>Chapter 1</title></head>
+                <body><p>First chapter.</p></body>
+            </html>
+            """
+            mock_item2 = MagicMock()
+            mock_item2.get_content.return_value = b"""
+            <html>
+                <head><title>Chapter 2</title></head>
+                <body><p>Second chapter.</p></body>
+            </html>
+            """
+            mock_book.get_metadata.side_effect = lambda ns, key: {
+                ('DC', 'title'): [('Test Book', {})],
+                ('DC', 'creator'): [('Test Author', {})],
+                ('OPF', 'cover'): [],
+            }.get((ns, key), [])
+            mock_book.get_items.return_value = []
+            mock_book.get_items_of_type.side_effect = lambda item_type: {
+                app.ebooklib.ITEM_DOCUMENT: [mock_item1, mock_item2],
+                app.ebooklib.ITEM_COVER: [],
+                app.ebooklib.ITEM_IMAGE: [],
+            }.get(item_type, [])
+            mock_epub.read_epub.return_value = mock_book
+
+            updates = []
+            parsed = parse_epub(
+                "test.epub",
+                progress_callback=lambda current, total, chapter_count: updates.append(
+                    (current, total, chapter_count)
+                ),
+            )
+
+            assert parsed.metadata.title == "Test Book"
+            assert parsed.metadata.author == "Test Author"
+            assert len(parsed.chapters) == 2
+            assert updates == [(1, 2, 1), (2, 2, 2)]
 
 
 @pytest.mark.integration

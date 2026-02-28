@@ -37,6 +37,9 @@ export interface ProgressInfo {
     totalChars?: number;     // Total characters in EPUB
     chapterCount?: number;   // Number of chapters in EPUB
     backendResolved?: ResolvedBackend;
+    parseCurrentItem?: number;
+    parseTotalItems?: number;
+    parseChapterCount?: number;
     recovery?: RecoveryInfo;
 }
 
@@ -48,6 +51,9 @@ export interface ParserState {
     lastTotalChars?: number;
     lastChapterCount?: number;
     lastBackendResolved?: ResolvedBackend;
+    lastParseCurrentItem?: number;
+    lastParseTotalItems?: number;
+    lastParseChapterCount?: number;
 }
 
 interface JsonEvent {
@@ -63,6 +69,9 @@ interface JsonEvent {
     details?: string;
     current_chunk?: number;
     total_chunks?: number;
+    current_item?: number;
+    total_items?: number;
+    current_chapter_count?: number;
     attempt?: number;
     max_attempts?: number;
     reason?: string;
@@ -123,6 +132,25 @@ export function createParserState(): ParserState {
     };
 }
 
+function buildProgressInfo(
+    state: ParserState,
+    overrides: Partial<ProgressInfo> = {},
+): ProgressInfo {
+    return {
+        progress: state.lastProgress,
+        currentChunk: state.lastCurrentChunk,
+        totalChunks: state.lastTotal,
+        phase: state.lastPhase,
+        totalChars: state.lastTotalChars,
+        chapterCount: state.lastChapterCount,
+        backendResolved: state.lastBackendResolved,
+        parseCurrentItem: state.lastParseCurrentItem,
+        parseTotalItems: state.lastParseTotalItems,
+        parseChapterCount: state.lastParseChapterCount,
+        ...overrides,
+    };
+}
+
 export function parseOutputLine(line: string, state: ParserState): ProgressInfo | null {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -135,15 +163,7 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
 
             if (event.type === 'phase' && typeof event.phase === 'string' && isProcessingPhase(event.phase)) {
                 state.lastPhase = event.phase;
-                return {
-                    progress: state.lastProgress,
-                    currentChunk: state.lastCurrentChunk,
-                    totalChunks: state.lastTotal,
-                    phase: event.phase,
-                    totalChars: state.lastTotalChars,
-                    chapterCount: state.lastChapterCount,
-                    backendResolved: state.lastBackendResolved,
-                };
+                return buildProgressInfo(state, { phase: event.phase });
             }
 
             if (event.type === 'metadata' && typeof event.key === 'string') {
@@ -160,41 +180,28 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
                     return null;
                 }
 
-                return {
-                    progress: state.lastProgress,
-                    currentChunk: state.lastCurrentChunk,
-                    totalChunks: state.lastTotal,
-                    phase: state.lastPhase,
-                    totalChars: state.lastTotalChars,
-                    chapterCount: state.lastChapterCount,
-                    backendResolved: state.lastBackendResolved,
-                };
+                return buildProgressInfo(state);
+            }
+
+            if (
+                event.type === 'parse_progress'
+                && typeof event.current_item === 'number'
+                && typeof event.total_items === 'number'
+                && event.total_items > 0
+                && typeof event.current_chapter_count === 'number'
+            ) {
+                state.lastParseCurrentItem = event.current_item;
+                state.lastParseTotalItems = event.total_items;
+                state.lastParseChapterCount = event.current_chapter_count;
+                return buildProgressInfo(state);
             }
 
             if (event.type === 'timing' && typeof event.chunk_timing_ms === 'number') {
-                return {
-                    progress: state.lastProgress,
-                    currentChunk: state.lastCurrentChunk,
-                    totalChunks: state.lastTotal,
-                    phase: state.lastPhase,
-                    chunkTimingMs: event.chunk_timing_ms,
-                    totalChars: state.lastTotalChars,
-                    chapterCount: state.lastChapterCount,
-                    backendResolved: state.lastBackendResolved,
-                };
+                return buildProgressInfo(state, { chunkTimingMs: event.chunk_timing_ms });
             }
 
             if (event.type === 'heartbeat' && typeof event.heartbeat_ts === 'number') {
-                return {
-                    progress: state.lastProgress,
-                    currentChunk: state.lastCurrentChunk,
-                    totalChunks: state.lastTotal,
-                    phase: state.lastPhase,
-                    heartbeatTs: event.heartbeat_ts,
-                    totalChars: state.lastTotalChars,
-                    chapterCount: state.lastChapterCount,
-                    backendResolved: state.lastBackendResolved,
-                };
+                return buildProgressInfo(state, { heartbeatTs: event.heartbeat_ts });
             }
 
             if (
@@ -202,20 +209,13 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
                 && typeof event.id === 'number'
                 && (event.status === 'IDLE' || event.status === 'INFER' || event.status === 'ENCODE')
             ) {
-                return {
-                    progress: state.lastProgress,
-                    currentChunk: state.lastCurrentChunk,
-                    totalChunks: state.lastTotal,
-                    phase: state.lastPhase,
+                return buildProgressInfo(state, {
                     workerStatus: {
                         id: event.id,
                         status: event.status,
                         details: event.details ?? '',
                     },
-                    totalChars: state.lastTotalChars,
-                    chapterCount: state.lastChapterCount,
-                    backendResolved: state.lastBackendResolved,
-                };
+                });
             }
 
             if (
@@ -229,15 +229,11 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
                 state.lastCurrentChunk = event.current_chunk;
                 state.lastTotal = event.total_chunks;
 
-                return {
+                return buildProgressInfo(state, {
                     progress,
                     currentChunk: event.current_chunk,
                     totalChunks: event.total_chunks,
-                    phase: state.lastPhase,
-                    totalChars: state.lastTotalChars,
-                    chapterCount: state.lastChapterCount,
-                    backendResolved: state.lastBackendResolved,
-                };
+                });
             }
 
             if (
@@ -251,14 +247,7 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
                 && typeof event.chunk_chars === 'number'
                 && typeof event.workers === 'number'
             ) {
-                return {
-                    progress: state.lastProgress,
-                    currentChunk: state.lastCurrentChunk,
-                    totalChunks: state.lastTotal,
-                    phase: state.lastPhase,
-                    totalChars: state.lastTotalChars,
-                    chapterCount: state.lastChapterCount,
-                    backendResolved: state.lastBackendResolved,
+                return buildProgressInfo(state, {
                     recovery: {
                         attempt: event.attempt,
                         maxAttempts: event.max_attempts,
@@ -269,7 +258,7 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
                         chunkChars: event.chunk_chars,
                         workers: event.workers,
                     },
-                };
+                });
             }
         } catch {
             // Fall back to legacy parser below.
@@ -282,30 +271,14 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
             return null;
         }
         state.lastPhase = phase;
-        return {
-            progress: state.lastProgress,
-            currentChunk: state.lastCurrentChunk,
-            totalChunks: state.lastTotal,
-            phase,
-            totalChars: state.lastTotalChars,
-            chapterCount: state.lastChapterCount,
-            backendResolved: state.lastBackendResolved,
-        };
+        return buildProgressInfo(state, { phase });
     }
 
     if (trimmed.startsWith('METADATA:backend_resolved:')) {
         const backendResolved = trimmed.slice(26);
         if (backendResolved === 'pytorch' || backendResolved === 'mlx' || backendResolved === 'mock') {
             state.lastBackendResolved = backendResolved;
-            return {
-                progress: state.lastProgress,
-                currentChunk: state.lastCurrentChunk,
-                totalChunks: state.lastTotal,
-                phase: state.lastPhase,
-                totalChars: state.lastTotalChars,
-                chapterCount: state.lastChapterCount,
-                backendResolved,
-            };
+            return buildProgressInfo(state, { backendResolved });
         }
         return null;
     }
@@ -316,15 +289,7 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
             return null;
         }
         state.lastTotalChars = totalChars;
-        return {
-            progress: state.lastProgress,
-            currentChunk: state.lastCurrentChunk,
-            totalChunks: state.lastTotal,
-            phase: state.lastPhase,
-            totalChars,
-            chapterCount: state.lastChapterCount,
-            backendResolved: state.lastBackendResolved,
-        };
+        return buildProgressInfo(state, { totalChars });
     }
 
     if (trimmed.startsWith('METADATA:chapter_count:')) {
@@ -333,15 +298,29 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
             return null;
         }
         state.lastChapterCount = chapterCount;
-        return {
-            progress: state.lastProgress,
-            currentChunk: state.lastCurrentChunk,
-            totalChunks: state.lastTotal,
-            phase: state.lastPhase,
-            totalChars: state.lastTotalChars,
-            chapterCount,
-            backendResolved: state.lastBackendResolved,
-        };
+        return buildProgressInfo(state, { chapterCount });
+    }
+
+    if (trimmed.startsWith('PARSE_PROGRESS:')) {
+        const match = trimmed.match(/^PARSE_PROGRESS:(\d+)\/(\d+):(\d+)$/);
+        if (!match) {
+            return null;
+        }
+        const currentItem = parseInt(match[1], 10);
+        const totalItems = parseInt(match[2], 10);
+        const currentChapterCount = parseInt(match[3], 10);
+        if (
+            Number.isNaN(currentItem)
+            || Number.isNaN(totalItems)
+            || Number.isNaN(currentChapterCount)
+            || totalItems <= 0
+        ) {
+            return null;
+        }
+        state.lastParseCurrentItem = currentItem;
+        state.lastParseTotalItems = totalItems;
+        state.lastParseChapterCount = currentChapterCount;
+        return buildProgressInfo(state);
     }
 
     if (trimmed.startsWith('TIMING:')) {
@@ -349,16 +328,7 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
         if (parts.length >= 2) {
             const chunkTimingMs = parseInt(parts[1], 10);
             if (!Number.isNaN(chunkTimingMs)) {
-                return {
-                    progress: state.lastProgress,
-                    currentChunk: state.lastCurrentChunk,
-                    totalChunks: state.lastTotal,
-                    phase: state.lastPhase,
-                    chunkTimingMs,
-                    totalChars: state.lastTotalChars,
-                    chapterCount: state.lastChapterCount,
-                    backendResolved: state.lastBackendResolved,
-                };
+                return buildProgressInfo(state, { chunkTimingMs });
             }
         }
         return null;
@@ -369,16 +339,7 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
         if (Number.isNaN(heartbeatTs)) {
             return null;
         }
-        return {
-            progress: state.lastProgress,
-            currentChunk: state.lastCurrentChunk,
-            totalChunks: state.lastTotal,
-            phase: state.lastPhase,
-            heartbeatTs,
-            totalChars: state.lastTotalChars,
-            chapterCount: state.lastChapterCount,
-            backendResolved: state.lastBackendResolved,
-        };
+        return buildProgressInfo(state, { heartbeatTs });
     }
 
     if (trimmed.startsWith('WORKER:')) {
@@ -390,16 +351,9 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
                 !Number.isNaN(id)
                 && (status === 'IDLE' || status === 'INFER' || status === 'ENCODE')
             ) {
-                return {
-                    progress: state.lastProgress,
-                    currentChunk: state.lastCurrentChunk,
-                    totalChunks: state.lastTotal,
-                    phase: state.lastPhase,
+                return buildProgressInfo(state, {
                     workerStatus: { id, status, details: parts.slice(3).join(':') },
-                    totalChars: state.lastTotalChars,
-                    chapterCount: state.lastChapterCount,
-                    backendResolved: state.lastBackendResolved,
-                };
+                });
             }
         }
         return null;
@@ -418,15 +372,11 @@ export function parseOutputLine(line: string, state: ParserState): ProgressInfo 
         state.lastCurrentChunk = current;
         state.lastTotal = total;
 
-        return {
+        return buildProgressInfo(state, {
             progress,
             currentChunk: current,
             totalChunks: total,
-            phase: state.lastPhase,
-            totalChars: state.lastTotalChars,
-            chapterCount: state.lastChapterCount,
-            backendResolved: state.lastBackendResolved,
-        };
+        });
     }
 
     return null;
@@ -713,6 +663,9 @@ function runTTSAttempt(
                     totalChars: parserState.lastTotalChars,
                     chapterCount: parserState.lastChapterCount,
                     backendResolved: parserState.lastBackendResolved,
+                    parseCurrentItem: parserState.lastParseCurrentItem,
+                    parseTotalItems: parserState.lastParseTotalItems,
+                    parseChapterCount: parserState.lastParseChapterCount,
                 });
                 resolve();
             } else {

@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, TextIO, Tuple
+from typing import Any, Callable, Dict, List, Optional, TextIO, Tuple
 
 import numpy as np
 from bs4 import BeautifulSoup
@@ -82,6 +82,7 @@ class EventEmitter:
         self.event_format = event_format
         self.job_id = job_id
         self._log_fp: Optional[TextIO] = None
+        self._write_lock = threading.Lock()
 
         if log_file:
             log_dir = os.path.dirname(os.path.abspath(log_file))
@@ -90,11 +91,12 @@ class EventEmitter:
             self._log_fp = open(log_file, "a", encoding="utf-8")
 
     def _write(self, line: str, *, stderr: bool = False) -> None:
-        stream = sys.stderr if stderr else sys.stdout
-        print(line, file=stream, flush=True)
-        if self._log_fp is not None:
-            self._log_fp.write(line + "\n")
-            self._log_fp.flush()
+        with self._write_lock:
+            stream = sys.stderr if stderr else sys.stdout
+            print(line, file=stream, flush=True)
+            if self._log_fp is not None:
+                self._log_fp.write(line + "\n")
+                self._log_fp.flush()
 
     def close(self) -> None:
         if self._log_fp is not None:
@@ -119,6 +121,13 @@ class EventEmitter:
             return
         if event_type == "timing":
             self._write(f"TIMING:{payload['chunk_idx']}:{payload['chunk_timing_ms']}")
+            return
+        if event_type == "parse_progress":
+            self._write(
+                "PARSE_PROGRESS:"
+                f"{payload['current_item']}/{payload['total_items']}:"
+                f"{payload['current_chapter_count']}"
+            )
             return
         if event_type == "heartbeat":
             self._write(f"HEARTBEAT:{payload['heartbeat_ts']}")
@@ -226,6 +235,12 @@ class BookMetadata:
 
 
 @dataclass
+class ParsedEpub:
+    metadata: BookMetadata
+    chapters: List[Tuple[str, str]]
+
+
+@dataclass
 class ChapterInfo:
     title: str
     start_sample: int
@@ -244,30 +259,27 @@ def _require_epub_support() -> None:
         )
 
 
-def extract_epub_metadata(epub_path: str) -> BookMetadata:
-    """Extract title, author, and cover image from EPUB file."""
+def _load_epub_book(epub_path: str) -> Any:
     _require_epub_support()
-    book = epub.read_epub(epub_path)
+    return epub.read_epub(epub_path)
 
-    # Extract title
+
+def _extract_book_metadata(book: Any) -> BookMetadata:
+    """Extract title, author, and cover image from a loaded EPUB book."""
     title_meta = book.get_metadata('DC', 'title')
     title = title_meta[0][0] if title_meta else "Unknown Title"
 
-    # Extract author
     author_meta = book.get_metadata('DC', 'creator')
     author = author_meta[0][0] if author_meta else "Unknown Author"
 
-    # Extract cover image
     cover_image = None
     cover_mime_type = None
 
-    # Try ITEM_COVER first
     for item in book.get_items_of_type(ebooklib.ITEM_COVER):
         cover_image = item.get_content()
         cover_mime_type = item.media_type
         break
 
-    # If no ITEM_COVER, look for cover in metadata
     if cover_image is None:
         cover_meta = book.get_metadata('OPF', 'cover')
         if cover_meta:
@@ -279,7 +291,6 @@ def extract_epub_metadata(epub_path: str) -> BookMetadata:
                         cover_mime_type = item.media_type
                         break
 
-    # Fallback: look for image items with "cover" in name
     if cover_image is None:
         for item in book.get_items_of_type(ebooklib.ITEM_IMAGE):
             item_name = item.get_name().lower()
@@ -296,12 +307,22 @@ def extract_epub_metadata(epub_path: str) -> BookMetadata:
     )
 
 
-def extract_epub_text(epub_path: str) -> List[Tuple[str, str]]:
-    _require_epub_support()
-    book = epub.read_epub(epub_path)
-    chapters = []
+def extract_epub_metadata(epub_path: str) -> BookMetadata:
+    """Extract title, author, and cover image from EPUB file."""
+    book = _load_epub_book(epub_path)
+    return _extract_book_metadata(book)
 
-    for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
+
+def parse_loaded_epub(
+    book: Any,
+    progress_callback: Optional[Callable[[int, int, int], None]] = None,
+) -> ParsedEpub:
+    metadata = _extract_book_metadata(book)
+    chapters = []
+    document_items = list(book.get_items_of_type(ebooklib.ITEM_DOCUMENT))
+    total_items = len(document_items)
+
+    for idx, item in enumerate(document_items, start=1):
         soup = BeautifulSoup(item.get_content(), "html.parser")
         title = ""
         if soup.title and soup.title.string:
@@ -310,11 +331,45 @@ def extract_epub_text(epub_path: str) -> List[Tuple[str, str]]:
         text = _clean_text(text)
         if text:
             chapters.append((title, text))
+        if progress_callback is not None:
+            progress_callback(idx, total_items, len(chapters))
 
     if not chapters:
         raise ValueError("No readable text content found in EPUB.")
 
-    return chapters
+    return ParsedEpub(metadata=metadata, chapters=chapters)
+
+
+def parse_epub(
+    epub_path: str,
+    progress_callback: Optional[Callable[[int, int, int], None]] = None,
+) -> ParsedEpub:
+    book = _load_epub_book(epub_path)
+    return parse_loaded_epub(book, progress_callback=progress_callback)
+
+
+def start_heartbeat_emitter(
+    events: EventEmitter,
+    interval_seconds: float = 5.0,
+    thread_name: str = "event-heartbeat",
+) -> Tuple[threading.Event, threading.Thread]:
+    stop_event = threading.Event()
+
+    def heartbeat_worker() -> None:
+        while not stop_event.wait(interval_seconds):
+            events.emit("heartbeat", heartbeat_ts=int(time.time() * 1000))
+
+    thread = threading.Thread(
+        target=heartbeat_worker,
+        name=thread_name,
+        daemon=True,
+    )
+    thread.start()
+    return stop_event, thread
+
+
+def extract_epub_text(epub_path: str) -> List[Tuple[str, str]]:
+    return parse_epub(epub_path).chapters
 
 
 def split_text_to_chunks(
@@ -1110,13 +1165,33 @@ def main() -> None:
 
         # Phase: Parsing
         events.emit("phase", phase="PARSING")
-        chapters = extract_epub_text(args.input)
+        parse_heartbeat_stop, parse_heartbeat_thread = start_heartbeat_emitter(
+            events,
+            thread_name="parse-heartbeat",
+        )
+        try:
+            parsed_epub = parse_epub(
+                args.input,
+                progress_callback=lambda current_item, total_items, chapter_count: (
+                    events.emit(
+                        "parse_progress",
+                        current_item=current_item,
+                        total_items=total_items,
+                        current_chapter_count=chapter_count,
+                    )
+                ),
+            )
+        finally:
+            parse_heartbeat_stop.set()
+            parse_heartbeat_thread.join(timeout=1)
+
+        chapters = parsed_epub.chapters
         chunks, chapter_start_indices = split_text_to_chunks(chapters, chunk_chars)
 
         # Extract book metadata for M4B format
         book_metadata = None
         if args.format == "m4b":
-            book_metadata = extract_epub_metadata(args.input)
+            book_metadata = parsed_epub.metadata
 
             # Apply metadata overrides if provided
             if args.title:

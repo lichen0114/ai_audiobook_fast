@@ -4,6 +4,8 @@ import { createParserState, parseOutputLine, type ProgressInfo } from '../../uti
 describe('IPC parsing integration', () => {
     it('parses a complete processing flow with state carried across events', () => {
         const output = `PHASE:PARSING
+PARSE_PROGRESS:1/5:1
+PARSE_PROGRESS:5/5:4
 METADATA:backend_resolved:mock
 METADATA:total_chars:15000
 METADATA:chapter_count:5
@@ -39,6 +41,10 @@ PHASE:EXPORTING`;
         const totalCharsMetadata = updates.find((u) => u.totalChars === 15000);
         expect(totalCharsMetadata?.backendResolved).toBe('mock');
 
+        const parseProgress = updates.find((u) => u.parseCurrentItem === 5);
+        expect(parseProgress?.parseTotalItems).toBe(5);
+        expect(parseProgress?.parseChapterCount).toBe(4);
+
         const chapterMetadata = updates.find((u) => u.chapterCount === 5);
         expect(chapterMetadata?.chapterCount).toBe(5);
 
@@ -55,7 +61,7 @@ PHASE:EXPORTING`;
     it('handles partial line buffering and only parses complete lines', () => {
         const chunks = [
             'PHASE:PARS',
-            'ING\nMETADATA:total_chars:5000\n',
+            'ING\nPARSE_PROGRESS:1/4:1\nMETADATA:total_chars:5000\n',
             'PHASE:INFER',
             'ENCE\nPROGRESS:1/10 chunks\n',
         ];
@@ -84,15 +90,17 @@ PHASE:EXPORTING`;
             }
         }
 
-        expect(updates.length).toBe(4);
+        expect(updates.length).toBe(5);
         expect(updates[0].phase).toBe('PARSING');
-        expect(updates[1].totalChars).toBe(5000);
-        expect(updates[2].phase).toBe('INFERENCE');
-        expect(updates[3].currentChunk).toBe(1);
+        expect(updates[1].parseCurrentItem).toBe(1);
+        expect(updates[2].totalChars).toBe(5000);
+        expect(updates[3].phase).toBe('INFERENCE');
+        expect(updates[4].currentChunk).toBe(1);
     });
 
     it('parses JSON IPC flow emitted by backend --event_format json', () => {
         const output = `{"type":"phase","phase":"PARSING"}
+{"type":"parse_progress","current_item":2,"total_items":6,"current_chapter_count":1}
 {"type":"metadata","key":"backend_resolved","value":"mock"}
 {"type":"metadata","key":"total_chars","value":3000}
 {"type":"phase","phase":"INFERENCE"}
@@ -116,6 +124,7 @@ PHASE:EXPORTING`;
         expect(updates.some((u) => u.phase === 'INFERENCE')).toBe(true);
         expect(updates.some((u) => u.phase === 'EXPORTING')).toBe(true);
         expect(updates.some((u) => u.backendResolved === 'mock')).toBe(true);
+        expect(updates.some((u) => u.parseCurrentItem === 2 && u.parseTotalItems === 6 && u.parseChapterCount === 1)).toBe(true);
         expect(updates.some((u) => u.totalChars === 3000)).toBe(true);
         expect(updates.some((u) => u.chunkTimingMs === 456)).toBe(true);
         expect(updates.some((u) => u.heartbeatTs === 1704067200000)).toBe(true);

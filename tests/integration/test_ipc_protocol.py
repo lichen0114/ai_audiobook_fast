@@ -73,10 +73,17 @@ class TestIPCProtocol:
         captured = capsys.readouterr()
         assert "PROGRESS:42/100 chunks" in captured.out
 
+    def test_parse_progress_format(self, capsys):
+        """PARSE_PROGRESS:N/M:C should have correct format."""
+        print("PARSE_PROGRESS:4/12:3", flush=True)
+        captured = capsys.readouterr()
+        assert "PARSE_PROGRESS:4/12:3" in captured.out
+
     def test_ipc_message_sequence(self, capsys):
         """Messages should appear in correct sequence."""
         messages = [
             "PHASE:PARSING",
+            "PARSE_PROGRESS:1/2:1",
             "METADATA:total_chars:5000",
             "PHASE:INFERENCE",
             "WORKER:0:INFER:Chunk 1/10",
@@ -156,10 +163,24 @@ class TestIPCProtocolParsing:
         assert current == 42
         assert total == 100
 
+    def test_parse_parse_progress_message(self):
+        """Should parse PARSE_PROGRESS:N/M:C messages."""
+        line = "PARSE_PROGRESS:4/12:3"
+        import re
+        match = re.match(r"PARSE_PROGRESS:(\d+)/(\d+):(\d+)", line)
+        assert match is not None
+        current = int(match.group(1))
+        total = int(match.group(2))
+        chapters = int(match.group(3))
+        assert current == 4
+        assert total == 12
+        assert chapters == 3
+
     def test_parse_mixed_output(self):
         """Should handle mixed output with non-IPC messages."""
         output = """
 PHASE:PARSING
+PARSE_PROGRESS:1/4:1
 Loading EPUB...
 METADATA:total_chars:5000
 Processing 10 chunks (sequential GPU + background encoding)
@@ -176,13 +197,14 @@ PROGRESS:1/10 chunks
         for line in lines:
             line = line.strip()
             if any(line.startswith(prefix) for prefix in
-                   ["PHASE:", "METADATA:", "WORKER:", "TIMING:", "HEARTBEAT:", "PROGRESS:"]):
+                   ["PHASE:", "METADATA:", "WORKER:", "TIMING:", "HEARTBEAT:", "PROGRESS:", "PARSE_PROGRESS:"]):
                 ipc_messages.append(line)
 
-        assert len(ipc_messages) == 6
+        assert len(ipc_messages) == 7
         assert ipc_messages[0] == "PHASE:PARSING"
-        assert ipc_messages[1] == "METADATA:total_chars:5000"
-        assert ipc_messages[2] == "PHASE:INFERENCE"
-        assert ipc_messages[3] == "WORKER:0:INFER:Chunk 1/10"
-        assert ipc_messages[4] == "TIMING:0:1500"
-        assert ipc_messages[5] == "PROGRESS:1/10 chunks"
+        assert ipc_messages[1] == "PARSE_PROGRESS:1/4:1"
+        assert ipc_messages[2] == "METADATA:total_chars:5000"
+        assert ipc_messages[3] == "PHASE:INFERENCE"
+        assert ipc_messages[4] == "WORKER:0:INFER:Chunk 1/10"
+        assert ipc_messages[5] == "TIMING:0:1500"
+        assert ipc_messages[6] == "PROGRESS:1/10 chunks"
