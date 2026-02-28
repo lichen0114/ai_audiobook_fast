@@ -1,6 +1,6 @@
 # Formats and Metadata
 
-This guide explains output format behavior (MP3 vs M4B) and how metadata is extracted/overridden.
+This guide explains output format behavior and how metadata is extracted, overridden, and embedded.
 
 ## Overview
 
@@ -15,31 +15,29 @@ Both are exported through direct `ffmpeg` subprocess calls in `app.py`.
 | Topic | MP3 | M4B |
 | --- | --- | --- |
 | Default format | Yes | No |
-| Container/codec | MP3 | `.m4b` with AAC audio |
+| Container and codec | MP3 | `.m4b` with AAC audio |
 | Chapter markers | No | Yes |
-| Embedded title/author | Typically not written by this pipeline | Yes (via ffmetadata) |
-| Cover art embedding | No | Yes (optional) |
-| Optimized streaming export path | Yes (when checkpointing is off) | No |
+| Embedded title and author | Not a primary part of the current pipeline | Yes, via `ffmetadata` |
+| Cover art embedding | No | Yes, optional |
+| Streaming export path | Yes, when checkpointing is off | No |
 | Checkpoint support | Yes | Yes |
 
 ## MP3 Export Behavior
 
-### Runtime export path
-
 MP3 export uses `ffmpeg` directly.
 
 Current runtime has two MP3 paths:
-1. **Streaming path** (fast path)
-   - Used when format is `mp3` and checkpointing is off
+1. Streaming path
+   - Used when output is `mp3` and checkpointing is off
    - PCM is streamed directly into an `ffmpeg` subprocess
-2. **Spool-file path**
-   - Used when checkpointing is on (or when not using the streaming path)
+2. Spool-file path
+   - Used when checkpointing is on, or whenever the streaming path is not used
    - Backend writes PCM to a temporary file, then runs `ffmpeg`
 
 ### MP3 options
 
 - `--bitrate {128k,192k,320k}`
-- `--normalize` (adds `loudnorm` audio filter)
+- `--normalize`
 
 Example:
 
@@ -53,21 +51,23 @@ Example:
 
 ## M4B Export Behavior
 
-M4B export always uses a spool-file based path in the current implementation.
+M4B export always uses a spool-file path in the current implementation.
 
 ### What gets embedded
 
-- title (from EPUB metadata or `--title` override)
-- author (from EPUB metadata or `--author` override)
-- chapter markers (derived from EPUB chapter boundaries and final sample offsets)
-- optional cover image (`--cover` override or EPUB cover if present)
+- Title from EPUB metadata or `--title`
+- Author from EPUB metadata or `--author`
+- Chapter markers derived from EPUB chapter boundaries and final sample offsets
+- Optional cover image from `--cover` or the EPUB cover when present
 
 ### M4B options
 
 - `--format m4b`
-- `--bitrate {128k,192k,320k}` (AAC bitrate)
+- `--bitrate {128k,192k,320k}`
 - `--normalize`
-- `--title`, `--author`, `--cover`
+- `--title`
+- `--author`
+- `--cover`
 
 Example:
 
@@ -81,7 +81,7 @@ Example:
   --output book.m4b
 ```
 
-## Metadata Sources and Overrides
+## Metadata Sources and Override Precedence
 
 ### EPUB metadata extraction
 
@@ -91,29 +91,41 @@ The backend can extract EPUB metadata with:
 .venv/bin/python app.py --extract_metadata --input book.epub --output /dev/null
 ```
 
-The backend emits metadata events including:
+The backend emits metadata including:
 - `title`
 - `author`
 - `has_cover`
 
-The interactive CLI uses a helper (`cli/src/utils/metadata.ts`) that calls this mode before M4B processing.
+The interactive CLI uses this helper before the metadata editor flow for single-file M4B runs.
 
-### Override precedence for M4B
+### Direct backend usage
 
-When `--format m4b` is used:
-1. backend extracts metadata from the EPUB
-2. optional CLI/user overrides are applied (`--title`, `--author`, `--cover`)
-3. final metadata is exported through ffmetadata + `ffmpeg`
+When `--format m4b` is used directly:
+1. The backend extracts metadata from the EPUB
+2. Explicit overrides from `--title`, `--author`, and `--cover` are applied
+3. Final metadata is exported through `ffmetadata` and `ffmpeg`
+
+### Interactive CLI usage
+
+The current CLI behavior depends on batch size:
+
+| CLI path | Current behavior |
+| --- | --- |
+| Single-file `m4b` | Opens the metadata editor, lets the user edit title, author, and cover, then passes overrides to the backend |
+| Multi-file `m4b` | Skips the metadata editor and keeps per-file EPUB metadata without a per-file override UI |
+| Any non-`m4b` output | Does not keep metadata override fields |
+
+This distinction matters because the CLI planner strips metadata override fields unless the batch contains exactly one file and the output format is `m4b`.
 
 ### Cover image overrides
 
-`--cover <path>` replaces the EPUB cover (if any).
+`--cover <path>` replaces the EPUB cover when present.
 
-Supported extension handling in current backend code:
+Supported extension handling in the current backend:
 - `.jpg`, `.jpeg` -> `image/jpeg`
 - `.png` -> `image/png`
 - `.gif` -> `image/gif`
-- unknown extension -> defaults to `image/jpeg`
+- Unknown extension -> defaults to `image/jpeg`
 
 If the file does not exist, the backend raises `FileNotFoundError`.
 
@@ -123,30 +135,19 @@ Chapter markers are generated from EPUB chapter boundaries after chunking and au
 
 At a high level:
 1. EPUB text is split into chunks while preserving chapter-start references
-2. backend tracks sample offsets for each chunk during processing
-3. chapter start/end samples are converted into ffmetadata chapter entries
+2. The backend tracks sample offsets while processing chunks
+3. Chapter boundaries are converted into `ffmetadata` chapter entries
 4. `ffmpeg` writes the final M4B with embedded chapters
 
 If a chapter title is missing, the backend falls back to `Chapter <n>`.
-
-## Interactive CLI Metadata Flow (M4B)
-
-Current CLI behavior (`cli/src/App.tsx` + `MetadataEditor.tsx`):
-- choosing `M4B` in the config wizard triggers metadata extraction for the first selected file
-- a metadata review screen lets the user:
-  - keep extracted metadata
-  - edit title
-  - edit author
-  - set a custom cover image path
-- the selected values are passed to the backend as `--title`, `--author`, `--cover`
 
 ## Format-Specific Operational Notes
 
 ### Checkpointing and format choice
 
 - Checkpointing works with both MP3 and M4B.
-- Checkpointing changes MP3 export behavior (disables the streaming fast path).
-- `overlap3` pipeline mode is currently restricted to MP3 without checkpointing.
+- Checkpointing disables the MP3 streaming fast path and forces the spool-file path.
+- `overlap3` is currently restricted to MP3 without checkpointing.
 
 ### Bitrate and normalization
 
@@ -154,25 +155,32 @@ Current CLI behavior (`cli/src/App.tsx` + `MetadataEditor.tsx`):
 - `--normalize` adds an `ffmpeg` loudness filter to both formats.
 - Normalization can increase processing time slightly.
 
+### Limitations to keep in mind
+
+- Chapter markers are implemented for M4B only.
+- The current interactive CLI does not expose per-file metadata override editing for multi-file M4B batches.
+- MP3 output does not use the M4B chapter and cover metadata path.
+
 ## Troubleshooting
 
-### M4B produced without expected metadata
+### M4B produced without the expected metadata
 
 Check:
-- you used `--format m4b`
-- override flags were passed correctly
-- cover file path exists and is readable
+- You used `--format m4b`
+- Override flags were passed correctly for direct backend usage
+- The cover file path exists and is readable
+- If you used the interactive CLI, confirm whether the run was single-file or multi-file
 
 ### Cover override failed
 
 Common causes:
-- wrong path
-- path contains shell characters without quoting
-- unsupported/mislabeled file extension (backend may default MIME to JPEG)
+- Wrong path
+- Path contains shell characters without quoting
+- Unsupported or mislabeled file extension
 
 ### I expected chapter markers in MP3
 
-Chapter markers are implemented for M4B output. Use `--format m4b`.
+Chapter markers are implemented for M4B output only. Use `--format m4b`.
 
 ## Related Docs
 

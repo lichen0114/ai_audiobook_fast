@@ -4,7 +4,7 @@ This guide explains how resumable processing works in AI Audiobook Fast.
 
 ## Summary
 
-Checkpointing is optional and stores per-chunk audio plus job metadata so an interrupted run can resume later.
+Checkpointing is optional. When enabled, the backend stores per-chunk audio plus job metadata so an interrupted run can resume later.
 
 Checkpoint data lives in a directory next to the output file:
 
@@ -17,14 +17,15 @@ Examples:
 - `book.mp3` -> `book.mp3.checkpoint/`
 - `book.m4b` -> `book.m4b.checkpoint/`
 
-## Flags
+## Relevant Flags and Modes
 
 | Flag | Purpose |
 | --- | --- |
 | `--checkpoint` | Enable checkpoint writes during processing |
-| `--resume` | Attempt to resume from an existing checkpoint (also enables checkpoint mode) |
-| `--check_checkpoint` | Report checkpoint status and exit |
-| `--no_checkpoint` | Deprecated no-op (checkpointing is already opt-in) |
+| `--resume` | Attempt to reuse an existing compatible checkpoint |
+| `--check_checkpoint` | Report checkpoint existence and EPUB hash compatibility, then exit |
+| `--inspect_job` | Emit full checkpoint compatibility plus job estimates, warnings, and metadata |
+| `--no_checkpoint` | Deprecated no-op; checkpointing is already opt-in |
 
 ## Typical Workflows
 
@@ -34,7 +35,7 @@ Examples:
 .venv/bin/python app.py --checkpoint --input book.epub --output book.mp3
 ```
 
-This stores checkpoint state and per-chunk `.npy` audio as the job progresses.
+This writes checkpoint state and per-chunk `.npy` audio as the job progresses.
 
 ### 2. Resume later
 
@@ -50,7 +51,7 @@ If the checkpoint is compatible, completed chunks are reused and the backend con
 .venv/bin/python app.py --check_checkpoint --input book.epub --output book.mp3
 ```
 
-This is useful for scripts or lightweight UI probes.
+This is the lightweight probe used by older helper flows and simple scripts.
 
 ### 4. Inspect a job with full resume compatibility
 
@@ -59,61 +60,80 @@ This is useful for scripts or lightweight UI probes.
   --input book.epub --output book.mp3
 ```
 
-Unlike `--check_checkpoint`, this mode performs the same compatibility checks used by resume mode and also reports chunk/work estimates.
+Unlike `--check_checkpoint`, this mode performs the same compatibility checks used by resume mode and also returns chunk estimates, EPUB metadata, warnings, and errors.
 
-## CLI Behavior (Interactive UI)
+## Interactive CLI Behavior
 
-The interactive CLI now uses a planning pass before processing starts.
+The interactive CLI uses a planning pass before processing starts.
 
 Current behavior:
 - The planner inspects every selected file, not just the first one.
-- Compatible checkpoints are marked to resume automatically on a per-file basis.
-- Incompatible checkpoints are marked `start-fresh` and deleted just before that file runs.
-- The review screen shows resumable files, warnings, and blocked output collisions before execution starts.
+- Each job gets a checkpoint action of `resume`, `start-fresh`, or `ignore`.
+- The review screen summarizes resumable jobs, warnings, errors, and blocked output collisions.
+- The only override in the current UI is `Start fresh for all resumable jobs`.
+
+Important nuance:
+- When checkpointing is disabled in the CLI, existing checkpoints are ignored, not deleted.
+- Deletion happens only for jobs that are explicitly planned as `start-fresh`, and it happens just before that job runs.
 
 ## What Gets Stored
 
-### `state.json` (`CheckpointState`)
+### `state.json`
 
 The backend stores:
 - `epub_hash`: SHA-256 hash of the input EPUB
-- `config`: key generation/export settings used for compatibility checks
+- `config`: key generation and export settings used for compatibility checks
 - `total_chunks`: number of chunks in the job
 - `completed_chunks`: chunk indexes already saved
-- `chapter_start_indices`: chapter boundary info used for final chapter metadata generation
+- `chapter_start_indices`: chapter boundary information used for final chapter metadata generation
 
 ### Chunk audio (`chunk_*.npy`)
 
-Each completed chunk is stored as a NumPy array (`int16` audio in practice).
+Each completed chunk is stored as a NumPy array, `int16` in practice.
 
-This lets the backend reuse already-generated chunks during resume and still produce final output without re-running TTS for those chunks.
+This lets the backend reuse generated chunks during resume and still produce final output without rerunning TTS for completed chunks.
 
-## Checkpoint Status Probe (`--check_checkpoint`)
+## Comparing Checkpoint-Related Modes
+
+### `--check_checkpoint`
 
 `--check_checkpoint` is a lightweight status mode that reports checkpoint existence and basic input compatibility.
 
-### Text output forms (legacy mode)
-
+Legacy text output forms:
 - `CHECKPOINT:NONE`
 - `CHECKPOINT:FOUND:<total_chunks>:<completed_chunks>`
 - `CHECKPOINT:INVALID:hash_mismatch`
 
 Important limitation:
-- `--check_checkpoint` verifies checkpoint existence and EPUB hash match.
-- It does **not** perform the full config compatibility validation used by `--resume`.
+- It verifies checkpoint existence and EPUB hash match.
+- It does not perform the full config compatibility validation used by `--resume`.
 
-Use `--inspect_job` when you need the same compatibility answer the runtime uses for `--resume`.
+### `--inspect_job`
 
-## Full Resume Validation (`--resume`)
+`--inspect_job` is the planning and integration surface used by the current CLI batch planner.
 
-When `--resume` is used, the backend performs stronger validation before reusing data.
+It performs the same compatibility checks used for resume mode and also reports:
+- Resolved backend
+- Resolved chunk size
+- Resolved pipeline mode
+- Total characters
+- Total chunks
+- Chapter count
+- EPUB metadata
+- Warnings and errors
+
+Use `--inspect_job` when you need the same resume answer the runtime uses for `--resume`.
+
+### `--resume`
+
+When `--resume` is used, the backend validates the checkpoint again during the real run before reusing data.
 
 Validation requires all of the following to match:
 - EPUB hash
 - `voice`
 - `speed`
 - `lang_code`
-- `backend` (resolved backend)
+- resolved `backend`
 - `chunk_chars`
 - `split_pattern`
 - `format`
@@ -121,27 +141,27 @@ Validation requires all of the following to match:
 - `normalize`
 
 Additional runtime checks:
-- `total_chunks` must match current chunking output (`chunk_mismatch` otherwise)
-- each claimed completed chunk should have its `.npy` audio file; missing files are reported and regenerated
+- `total_chunks` must match the current chunking output or the checkpoint is rejected as `chunk_mismatch`
+- Each completed chunk should have a saved `.npy` file; missing files are reported and regenerated
 
 ## Runtime Checkpoint Events
 
-During normal processing, the backend emits checkpoint events (text or JSON).
+During processing, the backend emits checkpoint events in text or JSON form.
 
 Common codes:
 
 | Code | Meaning |
 | --- | --- |
-| `NONE` | No checkpoint found (`--check_checkpoint` mode) |
-| `FOUND` | Checkpoint exists and hash matches (`--check_checkpoint` mode) |
-| `INVALID:hash_mismatch` | Probe mode detected different EPUB content |
-| `INVALID:config_mismatch` | Resume mode rejected checkpoint due to settings mismatch |
-| `INVALID:chunk_mismatch` | Resume mode found incompatible chunk count |
-| `RESUMING:<n>` | Resume mode accepted checkpoint with `<n>` completed chunks |
-| `REUSED:<idx>` | Chunk audio reused from checkpoint |
-| `MISSING_AUDIO:<idx>` | Chunk was marked complete but audio file is missing; chunk will be regenerated |
-| `SAVED:<idx>` | New chunk audio saved to checkpoint |
-| `CLEANED` | Checkpoint directory removed after successful completion |
+| `NONE` | No checkpoint found in `--check_checkpoint` mode |
+| `FOUND` | Checkpoint exists and the EPUB hash matches in `--check_checkpoint` mode |
+| `INVALID:hash_mismatch` | Lightweight probe detected different EPUB content |
+| `INVALID:config_mismatch` | Resume mode rejected the checkpoint because settings changed |
+| `INVALID:chunk_mismatch` | Resume mode rejected the checkpoint because chunk count changed |
+| `RESUMING:<n>` | Resume mode accepted the checkpoint with `<n>` completed chunks |
+| `REUSED:<idx>` | Chunk audio was reused from checkpoint |
+| `MISSING_AUDIO:<idx>` | Chunk was marked complete but its `.npy` file is missing and will be regenerated |
+| `SAVED:<idx>` | New chunk audio was saved to checkpoint |
+| `CLEANED` | Checkpoint directory was removed after successful completion |
 
 ## Lifecycle and Cleanup
 
@@ -149,57 +169,67 @@ Common codes:
 
 If checkpoint mode was active (`--checkpoint` or `--resume`), the backend cleans up the checkpoint directory and emits `CHECKPOINT:CLEANED`.
 
-### On failure/interruption
+### On failure or interruption
 
 Checkpoint artifacts are generally left on disk so you can:
-- resume later
-- inspect partial progress
-- debug a failing run
+- Resume later
+- Inspect partial progress
+- Debug a failing run
 
-Temporary spool/export files are still cleaned up separately by backend cleanup logic.
+Temporary spool and export files are cleaned up separately by backend cleanup logic.
 
 ## Performance and Behavior Notes
 
 - Checkpointing disables the optimized MP3 streaming path and uses a spool-file export path instead.
-- `overlap3` pipeline mode is currently not supported with checkpointing.
-- Resume reuse happens at the chunk level (not partial chunk internals).
+- `overlap3` is currently not supported with checkpointing.
+- Resume reuse happens at the chunk level, not at partial chunk internals.
+- Existing checkpoints can remain on disk even after a non-checkpointed CLI run, because ignored checkpoints are not deleted automatically.
 
 ## Troubleshooting
 
-### Resume was offered but backend started fresh
+### Resume was expected, but the backend started fresh
 
 Likely cause:
-- checkpoint hash matched, but runtime config changed (voice, backend, format, bitrate, etc.)
+- The EPUB hash matched, but runtime settings changed, such as voice, backend, format, bitrate, normalization, or chunk size
 
 What to do:
-- rerun with the same options as the original run, or
-- start fresh and allow the CLI to delete the checkpoint, or
-- manually delete `<output>.checkpoint/`
+- Rerun with the same settings as the original run
+- Use the CLI review action to start fresh for resumable jobs
+- Manually delete `<output>.checkpoint/`
 
 ### `INVALID:hash_mismatch`
 
-The input EPUB file content changed since the checkpoint was created.
+The input EPUB content changed since the checkpoint was created.
 
 What to do:
-- restore the original EPUB, or
-- delete the checkpoint and start a new run
+- Restore the original EPUB
+- Or delete the checkpoint and start a new run
 
 ### `MISSING_AUDIO:<idx>` events during resume
 
-Some chunk `.npy` files are missing/corrupted but state metadata exists.
+Some chunk `.npy` files are missing or unreadable while the state metadata still exists.
 
 What happens:
-- the backend drops the missing chunk from the completed set
-- regenerates that chunk
-- continues processing
+- The runtime drops the missing chunk from the completed set
+- Regenerates that chunk
+- Continues processing
+
+### The CLI ignored a checkpoint instead of deleting it
+
+Likely cause:
+- Checkpointing was disabled, so the planner chose `ignore`
+
+What to know:
+- Ignored checkpoints stay on disk
+- Only `start-fresh` jobs delete checkpoint data before execution
 
 ### I want resumability for long jobs by default
 
-Current default is checkpointing off for performance/simplicity.
+Current default is checkpointing off for performance and simplicity.
 
 Use one of these:
-- direct backend: add `--checkpoint`
-- interactive CLI: enable checkpointing in the config wizard
+- Direct backend: add `--checkpoint`
+- Interactive CLI: enable checkpointing in the config wizard
 
 ## Related Docs
 

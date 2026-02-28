@@ -1,26 +1,26 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) and other coding agents working in this repository.
+This file provides guidance to Claude Code and other coding agents working in this repository.
 
 ## Project Overview
 
 AI Audiobook Fast converts EPUB files into MP3 or M4B audiobooks using Kokoro TTS.
 
 Runtime architecture:
-- `cli/`: interactive terminal UI (TypeScript + Ink + React)
-- `app.py`: Python backend for EPUB parsing, TTS generation, checkpointing, and export
+- `cli/`: interactive terminal UI built with TypeScript, Ink, and React
+- `app.py`: Python backend for EPUB parsing, TTS generation, checkpointing, inspection, and export
 - `backends/`: pluggable TTS backends (`pytorch`, `mlx`, `mock`)
-- `checkpoint.py`: resumable processing state and chunk persistence
+- `checkpoint.py`: resumable processing state, chunk persistence, validation, and inspection
 
-The CLI launches the Python backend as a subprocess and parses its event stream (JSON in normal CLI operation; legacy text parsers remain for some helper flows).
+The CLI launches the Python backend as a subprocess and parses its event stream. JSON is the main path for the interactive CLI; legacy text parsing remains for a few helper utilities.
 
 ## Documentation Map
 
-Use these docs together when changing behavior:
-- `README.md`: end-user setup and usage
-- `ARCHITECTURE.md`: runtime design, pipeline modes, IPC
-- `CHECKPOINTS.md`: checkpoint/resume details
-- `FORMATS_AND_METADATA.md`: MP3/M4B and metadata behavior
+Use these docs together when behavior changes:
+- `README.md`: end-user setup, usage, and testing
+- `ARCHITECTURE.md`: runtime design, planner behavior, pipeline modes, and IPC
+- `CHECKPOINTS.md`: checkpoint and resume rules
+- `FORMATS_AND_METADATA.md`: MP3 vs M4B behavior and metadata semantics
 
 ## Common Commands
 
@@ -34,17 +34,17 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Optional test tooling
+# Required for documented Python test commands
 pip install -r requirements-dev.txt
 
 # Optional MLX backend (Apple Silicon)
 pip install -r requirements-mlx.txt
 
-# CLI deps
+# CLI dependencies
 npm install --prefix cli
 ```
 
-### Development (interactive CLI)
+### Development
 
 ```bash
 npm run dev --prefix cli
@@ -55,14 +55,16 @@ npm start --prefix cli
 
 ### Testing
 
+`pytest.ini` includes coverage options, so install `requirements-dev.txt` before running `pytest`.
+
 ```bash
-# Python fast tests + coverage gate used in CI workflow
+# Python fast tests + coverage gate used in CI
 .venv/bin/python -m pytest -m "not slow" --cov=app --cov-fail-under=75
 
 # Python subprocess e2e tests
 .venv/bin/python -m pytest tests/e2e
 
-# Slow format/ffmpeg validation tests
+# Slow format and ffmpeg validation tests
 .venv/bin/python -m pytest -m slow
 
 # CLI tests
@@ -70,7 +72,7 @@ npm test --prefix cli
 npm run test:coverage --prefix cli
 ```
 
-### Direct Backend Usage (Examples)
+### Direct Backend Usage
 
 ```bash
 # Basic MP3
@@ -83,12 +85,12 @@ npm run test:coverage --prefix cli
 .venv/bin/python app.py --format m4b --title "Title" --author "Author" \
   --cover ./cover.jpg --input book.epub --output book.m4b
 
-# Checkpoint create/resume
+# Checkpoint create and resume
 .venv/bin/python app.py --checkpoint --input book.epub --output book.mp3
 .venv/bin/python app.py --resume --input book.epub --output book.mp3
 
-# Integration mode (JSON events)
-.venv/bin/python app.py --event_format json --log_file ./run.log \
+# Planning and integration mode
+.venv/bin/python app.py --inspect_job --event_format json \
   --input book.epub --output book.mp3
 ```
 
@@ -96,78 +98,111 @@ npm run test:coverage --prefix cli
 
 ### CLI flow (`cli/src/App.tsx`)
 
-Current screen/state sequence:
+Current screen sequence:
 - `checking`
 - `setup-required` or `welcome`
 - `files`
 - `config`
-- `metadata` (M4B only)
-- `resume` (when checkpoint exists and is valid)
+- `metadata` for single-file M4B only
+- `planning`
+- `review`
 - `processing`
 - `done`
 
 Important implementation details:
-- M4B runs call `extractMetadata()` before processing and allow title/author/cover overrides.
-- Checkpoint pre-check uses `checkCheckpoint()` and shows a resume dialog before starting.
-- Choosing “start fresh” deletes `<output>.checkpoint/` for the checked file.
+- The CLI plans the batch before execution and inspects every selected file.
+- Single-file M4B runs call `extractMetadata()` and allow title, author, and cover overrides.
+- Multi-file M4B runs skip the metadata editor and do not keep override fields.
+- Checkpoint handling is chosen automatically per job during planning.
+- The active override is batch-level `Start fresh for all resumable jobs`; do not describe the current UX as ResumeDialog-driven.
+
+### Batch planning and execution
+
+Important current behavior:
+- `cli/src/utils/batch-planner.ts` builds a `BatchPlan` by calling `app.py --inspect_job` for each input.
+- Jobs with inspection failures still produce plan entries, so the rest of the batch can continue.
+- Duplicate output paths are blocked per job.
+- `cli/src/utils/batch-scheduler.ts` skips blocked or errored jobs and runs the rest sequentially.
+- Existing checkpoints are ignored, not deleted, when checkpointing is disabled.
 
 ### Backend (`app.py`)
 
-Key runtime responsibilities:
-- parse flags and validate inputs
-- resolve TTS backend (`auto`, `pytorch`, `mlx`, `mock`)
-- choose pipeline mode (`sequential` or `overlap3`)
-- parse EPUB and chunk text
-- emit progress events
-- manage checkpoints and resume logic
-- export MP3/M4B through `ffmpeg`
+Key responsibilities:
+- Parse flags and validate inputs
+- Resolve TTS backend (`auto`, `pytorch`, `mlx`, `mock`)
+- Resolve pipeline mode (`sequential` or `overlap3`)
+- Parse EPUB and chunk text
+- Emit progress, metadata, parse, checkpoint, inspection, and log events
+- Manage checkpoints and resume logic
+- Export MP3 and M4B through `ffmpeg`
 
 ### Pipeline modes
 
-- `sequential`: default for most paths, required for checkpointed runs and M4B
-- `overlap3`: optimized MP3 path (no checkpoints) using threaded inference/conversion queues
+- `sequential`: current effective default when `--pipeline_mode` is omitted
+- `overlap3`: optimized MP3 path without checkpointing
 
-`app.py` will warn and fall back to sequential if `--pipeline_mode overlap3` is requested for unsupported combinations.
+Notes:
+- The backend flag accepts only explicit values `sequential` or `overlap3`.
+- The CLI may keep an internal `auto` preference, but that is translated into omitting the backend flag.
+- The backend warns and falls back to `sequential` when `overlap3` is requested for unsupported combinations.
 
 ### Export paths
 
-Runtime export is `ffmpeg`-based (direct subprocess invocation):
+Runtime export is `ffmpeg`-based:
 - MP3 can stream PCM directly to an `ffmpeg` subprocess when checkpoints are off
-- MP3 and M4B can also use a temporary PCM spool file path
-- M4B export writes chapter metadata and optional cover art via ffmetadata + `ffmpeg`
+- MP3 and M4B can use a temporary PCM spool file path
+- M4B export writes chapter metadata and optional cover art through `ffmetadata` and `ffmpeg`
 
 Do not document runtime export as `pydub`-driven.
 
+### Apple Silicon recovery
+
+The CLI runner may retry once after a recoverable native failure on Apple Silicon with a safer profile:
+- `pytorch`
+- CPU instead of MPS
+- `sequential`
+- Smaller chunk size
+
 ## Backend Flags Worth Knowing
 
-Frequently changed / easy to drift:
+These drift easily and should be checked in `app.py` before changing docs:
 - `--backend`, `--format`, `--bitrate`, `--normalize`
 - `--checkpoint`, `--resume`, `--check_checkpoint`
+- `--inspect_job`, `--extract_metadata`
 - `--pipeline_mode`, `--prefetch_chunks`, `--pcm_queue_size`
 - `--event_format`, `--log_file`
 - `--title`, `--author`, `--cover`
-- `--extract_metadata`
 
 Notes:
-- `--workers` is currently a compatibility flag; inference remains sequential.
-- `--no_checkpoint` is deprecated and currently a no-op (checkpointing is opt-in).
+- `--workers` is a compatibility flag; inference remains sequential.
+- `--no_checkpoint` is deprecated and currently a no-op.
 
 ## IPC Protocol (CLI <-> Python)
 
-Backend event categories include:
-- `phase`, `metadata`, `timing`, `heartbeat`, `worker`, `progress`, `checkpoint`, `error`, `done`
-- `log` (JSON mode only; emitted by backend `info()` / `warn()` helpers)
+Current backend event categories include:
+- `phase`
+- `metadata`
+- `timing`
+- `parse_progress`
+- `heartbeat`
+- `worker`
+- `progress`
+- `checkpoint`
+- `inspection`
+- `error`
+- `done`
+- `log` in JSON mode
 
 The CLI runner (`cli/src/utils/tts-runner.ts`):
-- always passes `--event_format json`
-- writes backend logs to a timestamped file (`~/.audiobook-maker/logs` or repo `.logs` fallback)
-- parses JSON first, then legacy text lines as fallback
+- Always passes `--event_format json`
+- Writes backend logs to `~/.audiobook-maker/logs` or the repo `.logs` fallback
+- Parses JSON first and then falls back to legacy text parsing
 
-Legacy text parsing is still used directly by helper utilities like:
+Legacy text parsing is still used directly by helper utilities such as:
 - `cli/src/utils/metadata.ts`
 - `cli/src/utils/checkpoint.ts`
 
-## Environment Variables (CLI Runner / Local Dev)
+## Environment Variables
 
 Recognized or relevant variables:
 - `AUDIOBOOK_PYTHON`: preferred Python executable for CLI subprocesses
@@ -176,22 +211,23 @@ Recognized or relevant variables:
 - `AUDIOBOOK_OMP_THREADS`: override derived `OMP_NUM_THREADS`
 - `AUDIOBOOK_OPENBLAS_THREADS`: override derived `OPENBLAS_NUM_THREADS`
 
-When using PyTorch + MPS path, the CLI runner may set:
+For PyTorch MPS paths, the CLI runner may set:
 - `PYTORCH_ENABLE_MPS_FALLBACK=1`
 - `PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0`
 - `OMP_NUM_THREADS=<derived>`
 - `OPENBLAS_NUM_THREADS=<derived>`
 
-## Contributor Checklist For Behavior Changes
+## Doc Maintenance Hotspots
 
-If you change any of the following, update docs in the same PR:
-- backend flags or defaults
-- checkpoint validation rules or event codes
-- output format behavior (MP3/M4B, metadata, cover handling)
-- CLI workflow screens or config wizard steps
-- IPC event payloads or parsing semantics
+If you change any of these, update docs in the same PR:
+- CLI workflow screens or planning and review behavior
+- Backend flags or effective defaults
+- Checkpoint validation rules or event codes
+- Output format behavior, metadata handling, or cover handling
+- IPC event payloads or parser semantics
+- Apple Silicon recovery behavior
 
-Minimum docs to review per change:
+Minimum docs to review:
 - `README.md`
 - `ARCHITECTURE.md`
 - `CHECKPOINTS.md` and/or `FORMATS_AND_METADATA.md`
